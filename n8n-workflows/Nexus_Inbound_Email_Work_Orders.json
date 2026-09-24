@@ -1,0 +1,341 @@
+{
+  "name": "Nexus - Inbound Email Work Orders",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "filters": {
+          "customFilter": "isRead eq false"
+        },
+        "folder": "inbox"
+      },
+      "id": "node-outlook-trigger",
+      "name": "Microsoft Outlook Trigger",
+      "type": "n8n-nodes-base.microsoftOutlookTrigger",
+      "typeVersion": 2,
+      "position": [
+        180,
+        300
+      ],
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "maintenance-mailbox-oauth",
+          "name": "maintenance@nexusfms.com"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Step 2: Deterministic Pre-Classification Filter (P0-3 Approval Safety)\nconst item = $input.first().json;\nconst subject = (item.subject || '').trim();\nconst body = (item.bodyPreview || item.body?.content || '').trim();\nconst fromAddress = item.from?.emailAddress?.address || '';\n\n// Explicit approval intent patterns (strict, excludes generic 'Re: Quote')\nconst approvalPatterns = [\n  /quote\\s*(is\\s*)?approved/i,\n  /approve\\s*(the\\s*)?quote/i,\n  /quote\\s*accepted/i,\n  /accept\\s*(the\\s*)?quote/i,\n  /partial\\s*approval/i,\n  /approved\\s*up\\s*to\\s*([£$€]?\\d+)/i,\n  /proceed\\s*with\\s*(the\\s*)?(quote|work|repair)/i,\n  /go\\s*ahead\\s*with\\s*(the\\s*)?quote/i,\n  /approval\\s*confirmed/i,\n  /customer\\s*(accepts|approves)\\s*quote/i\n];\n\nconst hasDeterministicApproval = approvalPatterns.some(p => p.test(subject) || p.test(body));\n\nreturn [{\n  json: {\n    messageId: item.id,\n    internetMessageId: item.internetMessageId || item.id,\n    subject: subject,\n    bodySnippet: body.substring(0, 4000),\n    fromEmail: fromAddress,\n    fromName: item.from?.emailAddress?.name || '',\n    hasAttachments: Boolean(item.hasAttachments),\n    isDeterministicApproval: hasDeterministicApproval\n  }\n}];"
+      },
+      "id": "node-regex-filter",
+      "name": "Deterministic Filter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.isDeterministicApproval }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "node-check-approval",
+      "name": "Is Deterministic Approval?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        620,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Deterministic Approval Detected: STOP immediately & Leave UNREAD in Outlook\nconsole.log(`[Approval Filter] Blocked approval email: '${$json.subject}'. Leaving UNREAD for manual review.`);\nreturn [];"
+      },
+      "id": "node-stop-approval",
+      "name": "Stop (Leave UNREAD)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are the Nexus FMS Maintenance Dispatch Assistant. Analyze this inbound email sent to maintenance@nexusfms.com.\n\nCRITICAL CLASSIFICATION STATES:\n1. 'NEW_WORK_ORDER': A new maintenance fault or repair request.\n2. 'FULL_APPROVAL': Customer or agent is approving an existing quote.\n3. 'PARTIAL_APPROVAL': Customer is approving part of a quote or approving up to a monetary limit.\n4. 'APPROVAL_REPLY': Reply to a quote discussing or confirming approval.\n5. 'CUSTOMER_APPROVAL_DISCUSSION': Discussion of quote approval terms or costs.\n6. 'NON_WORK_ORDER': Invoices, general marketing, spam, auto-replies.\n7. 'AMBIGUOUS': Unclear intent.\n\nMANDATORY EXTRACTION RULES:\n- If NEW_WORK_ORDER, extract:\n  * title (concise 5-10 word summary)\n  * resident_name (full name of resident/tenant)\n  * contact_phone (valid phone number for tenant SMS)\n  * property_address (full address with street/city/postcode)\n  * description (meaningful verbatim description of fault)\n  * priority ('URGENT', 'HIGH', 'NORMAL', 'LOW')\n- DO NOT invent or guess missing phone numbers or addresses. If missing, leave as null and reduce confidence_score below 0.80.\n\nOutput STRICT JSON adhering to the specified schema."
+            },
+            {
+              "role": "user",
+              "content": "=Subject: {{ $json.subject }}\nSender: {{ $json.fromEmail }} ({{ $json.fromName }})\nBody:\n{{ $json.bodySnippet }}"
+            }
+          ]
+        },
+        "jsonOutput": true
+      },
+      "id": "node-ai-extraction",
+      "name": "AI Classification & Extraction",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1,
+      "position": [
+        840,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.classification_state === 'NEW_WORK_ORDER' }}",
+              "value2": true
+            },
+            {
+              "value1": "={{ $json.confidence_score >= 0.80 }}",
+              "value2": true
+            },
+            {
+              "value1": "={{ Boolean($json.title && $json.resident_name && $json.contact_phone && $json.property_address && $json.description) }}",
+              "value2": true
+            },
+            {
+              "value1": "={{ Boolean($('Deterministic Filter').first().json.fromEmail) }}",
+              "value2": true,
+              "_comment": "P1-1: original_sender_email (fromEmail) is mandatory. If missing, leave email UNREAD and never call backend."
+            }
+          ]
+        }
+      },
+      "id": "node-quality-gate",
+      "name": "Quality Gate (Score >= 0.8 & All 6 Fields)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1060,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Quality gate failed (Low confidence, approval, missing fields, or missing fromEmail)\nconsole.log(`[Quality Gate] Rejected: State='${$json.classification_state}', Confidence=${$json.confidence_score}. Leaving UNREAD for manual review.`);\nreturn [];"
+      },
+      "id": "node-gate-failed",
+      "name": "Exit Failsafe (Leave UNREAD)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/webhooks/quotes",
+        "_comment_url": "P1-3: No hardcoded fallback URL. BACKEND_URL must be set in n8n environment variables. If missing, workflow fails safely.",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.WEBHOOK_SECRET_KEY }}",
+              "_comment": "P1-3: Hardcoded secret fallback removed. WEBHOOK_SECRET_KEY must be configured as an n8n environment variable. If absent, n8n will send an empty/missing header and the backend will return 401, leaving the email UNREAD."
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"reference_id\": \"{{ $('Deterministic Filter').first().json.internetMessageId }}\",\n  \"subject\": \"{{ $json.title }}\",\n  \"title\": \"{{ $json.title }}\",\n  \"resident_name\": \"{{ $json.resident_name }}\",\n  \"contact_phone\": \"{{ $json.contact_phone }}\",\n  \"contact_email\": \"{{ $json.contact_email || '' }}\",\n  \"property_address\": \"{{ $json.property_address }}\",\n  \"description\": \"{{ $json.description }}\",\n  \"priority\": \"{{ $json.priority || 'NORMAL' }}\",\n  \"original_sender_email\": \"{{ $('Deterministic Filter').first().json.fromEmail }}\",\n  \"manager_name\": \"{{ $('Deterministic Filter').first().json.fromName || 'Email Requester' }}\",\n  \"attachments\": []\n}"
+      },
+      "id": "node-backend-webhook",
+      "name": "Call Nexus Inbound Webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1280,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.statusCode === 201 || ($json.statusCode === 200 && $json.body?.duplicated === true) }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "node-check-backend-success",
+      "name": "Backend Success? (201 or 200+duplicated)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1500,
+        500
+      ],
+      "_comment": "P1-2: Explicit gate. Only HTTP 201 (new creation) or HTTP 200 with duplicated=true (already processed) may proceed to Mark Email as READ. Any 400/401/403/409/422/500/timeout/malformed response routes to the UNREAD failsafe instead."
+    },
+    {
+      "parameters": {
+        "jsCode": "// P1-2: Backend returned a non-success status (400/401/403/409/422/500/timeout/malformed).\n// Email must remain UNREAD for manual investigation.\nconsole.log(`[Backend Success Gate] Backend returned status ${$json.statusCode}. Email left UNREAD.`);\nreturn [];"
+      },
+      "id": "node-backend-failed",
+      "name": "Backend Failed (Leave UNREAD)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1720,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "messageId": "={{ $('Deterministic Filter').first().json.messageId }}",
+        "updateFields": {
+          "isRead": true
+        }
+      },
+      "id": "node-mark-read",
+      "name": "Mark Email as READ",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        1720,
+        580
+      ],
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "maintenance-mailbox-oauth",
+          "name": "maintenance@nexusfms.com"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Microsoft Outlook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Deterministic Filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deterministic Filter": {
+      "main": [
+        [
+          {
+            "node": "Is Deterministic Approval?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Deterministic Approval?": {
+      "main": [
+        [
+          {
+            "node": "Stop (Leave UNREAD)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Classification & Extraction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Classification & Extraction": {
+      "main": [
+        [
+          {
+            "node": "Quality Gate (Score >= 0.8 & All 6 Fields)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quality Gate (Score >= 0.8 & All 6 Fields)": {
+      "main": [
+        [
+          {
+            "node": "Call Nexus Inbound Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Exit Failsafe (Leave UNREAD)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Nexus Inbound Webhook": {
+      "main": [
+        [
+          {
+            "node": "Backend Success? (201 or 200+duplicated)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Backend Success? (201 or 200+duplicated)": {
+      "main": [
+        [
+          {
+            "node": "Mark Email as READ",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Backend Failed (Leave UNREAD)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
