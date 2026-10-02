@@ -8,6 +8,7 @@ const triggerAutoPhotoRequest = async (workOrderId) => {
     const [jobRows] = await pool.query(
       `SELECT 
         w.id, w.job_number, w.title, w.resident_name, w.contact_phone, w.contact_email, w.property_address,
+        w.manager_email,
         r.full_name as live_resident_name, r.email as live_resident_email, r.phone as live_resident_phone 
        FROM work_orders w
        LEFT JOIN residents r ON w.resident_id = r.id
@@ -20,7 +21,15 @@ const triggerAutoPhotoRequest = async (workOrderId) => {
 
     const residentName = job.live_resident_name || job.resident_name || 'Resident';
     const residentPhone = job.contact_phone || job.live_resident_phone || null;
-    const residentEmail = job.contact_email || job.live_resident_email || null;
+
+    // FIX: Sirf residents table ka email use karo (live_resident_email).
+    // work_orders.contact_email mein Property Manager ka email bhi ho sakta hai.
+    // Photo request KABHI BHI Property Manager ko nahi jaani chahiye - sirf Tenant ko.
+    const residentEmail = job.live_resident_email || null;
+
+    // Property Manager ka email alag rakho - future reference ke liye
+    const managerEmail = job.manager_email || job.contact_email || null;
+
     const propertyAddress = job.property_address || '';
 
     // 2. Generate secure token or fetch existing token
@@ -81,11 +90,19 @@ const triggerAutoPhotoRequest = async (workOrderId) => {
       actionUrl: uploadLink,
       relatedEntityType: 'work_orders',
       relatedEntityId: workOrderId,
-      channels: ['EMAIL', 'SMS'],
-      contactEmail: residentEmail,
+      // FIX (BUG #1): Pehle channels: ['EMAIL', 'SMS'] tha jo galat tha.
+      // Photo request SIRF Tenant ke PHONE NUMBER par SMS ke zariye jaani chahiye.
+      // Email channel isliye HATA diya - kyunki contact_email mein Property Manager
+      // ka email bhi ho sakta hai, aur unhe 'Photos Required' message NAHI jaana chahiye.
+      channels: ['SMS'],
+      contactEmail: null,       // Email bilkul nahi bhejna - intentional
       contactPhone: residentPhone,
       propertyAddress
     });
+
+    // Agar manager ko koi notification deni ho toh alag se aur alag event se bhejna
+    // jaise 'ADMIN_OFFICE_ALERT' - yahan nahi.
+    console.log(`[QuoteRequestService] Photo request SMS dispatched to Tenant phone: ${residentPhone || 'N/A'} (Manager email NOT notified: ${managerEmail || 'N/A'})`,);
     
     console.log(`[QuoteRequestService] Auto photo request generated and dispatched for Job #${workOrderId} to ${residentPhone || 'N/A'}`);
 

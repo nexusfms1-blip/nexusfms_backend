@@ -8,6 +8,7 @@ const triggerAutoBookingRequest = async (workOrderId) => {
     const [jobRows] = await pool.query(
       `SELECT 
         w.id, w.job_number, w.title, w.resident_name, w.contact_phone, w.contact_email, w.property_address,
+        w.manager_email,
         r.full_name as live_resident_name, r.email as live_resident_email, r.phone as live_resident_phone 
        FROM work_orders w
        LEFT JOIN residents r ON w.resident_id = r.id
@@ -20,7 +21,11 @@ const triggerAutoBookingRequest = async (workOrderId) => {
 
     const residentName = job.live_resident_name || job.resident_name || 'Resident';
     const residentPhone = job.contact_phone || job.live_resident_phone || null;
-    const residentEmail = job.contact_email || job.live_resident_email || null;
+    
+    // FIX: Only use the true resident email, never the fallback contact_email which might be the manager
+    const residentEmail = job.live_resident_email || null;
+    const managerEmail = job.manager_email || job.contact_email || null;
+
     const propertyAddress = job.property_address || '';
 
     // 2. Generate secure token
@@ -69,8 +74,8 @@ const triggerAutoBookingRequest = async (workOrderId) => {
       actionUrl: bookingLink,
       relatedEntityType: 'work_orders',
       relatedEntityId: workOrderId,
-      channels: ['EMAIL', 'SMS'],
-      contactEmail: residentEmail,
+      channels: ['SMS'],
+      contactEmail: null,
       contactPhone: residentPhone,
       propertyAddress
     });
