@@ -87,8 +87,8 @@ const runPhotoReminderJob = async () => {
                  actionUrl: uploadLink,
                  relatedEntityType: 'work_orders',
                  relatedEntityId: req.work_order_id,
-                 channels: ['EMAIL', 'SMS'],
-                 contactEmail: req.resident_email,
+                 channels: ['SMS'],
+                 contactEmail: null, // Bhejna hi nahi hai email, only SMS
                  contactPhone: req.resident_phone,
                  connection // Pass transaction
                });
