@@ -40,6 +40,11 @@ const createWorkOrderEntity = async (data, user = null, dbConnection = null) => 
   let resAddress = (property_address || address || '').trim();
   let resEmail = (contact_email || email || contactEmail || '').trim() || null;
 
+  const origSenderEmailForFix = (original_sender_email || '').trim() || null;
+  if (resEmail && origSenderEmailForFix && resEmail.toLowerCase() === origSenderEmailForFix.toLowerCase()) {
+    resEmail = null;
+  }
+
   // Validation
   const jobTitle = (title || '').trim();
   if (!jobTitle) {

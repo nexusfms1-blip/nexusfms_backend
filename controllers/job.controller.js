@@ -51,6 +51,7 @@ const formatJobRow = (r, role) => {
     assignedStaffName: r.staff_name || null,
     assignedStaffColor: r.staff_color || '#009bf2',
     managerName: r.manager_name || null,
+      managerEmail: r.manager_email || r.original_sender_email || null,
     quoteAmount: r.quote_amount ? parseFloat(r.quote_amount) : null,
     scheduledDate: formatDateToISO(r.scheduled_date || r.booked_date || r.appointment_date),
     scheduledTimeSlot: r.scheduled_time_slot || r.booked_time_slot || r.time_slot || null,
