@@ -100,6 +100,30 @@ const triggerAutoPhotoRequest = async (workOrderId) => {
       propertyAddress
     });
 
+    // --- NEW CODE: Step 1 (Thank you email to manager) ---
+    if (managerEmail) {
+      await dispatcher.dispatch({
+        recipientUserId: null,
+        recipientRole: 'PROPERTY_MANAGER',
+        type: 'NEW_QUOTE_REQUEST_ACK',
+        title: 'Nexus FMS - Tenant Contacted for Maintenance Request',
+        messageTemplate: `Thank you for your email, we have contacted the tenant and will get a quote across to you as soon as possible.\n\nWork Order: ${job.job_number || 'N/A'} - ${job.title || 'Maintenance'}\nProperty: ${propertyAddress}`,
+        structuredData: {
+          jobNumber: job.job_number,
+          title: job.title,
+          propertyAddress
+        },
+        actionUrl: null,
+        relatedEntityType: 'work_orders',
+        relatedEntityId: workOrderId,
+        channels: ['EMAIL'],
+        contactEmail: managerEmail,
+        contactPhone: null
+      });
+      console.log(`[QuoteRequestService] Thank You email dispatched to Manager: ${managerEmail}`);
+    }
+    // --- END NEW CODE ---
+
     // Agar manager ko koi notification deni ho toh alag se aur alag event se bhejna
     // jaise 'ADMIN_OFFICE_ALERT' - yahan nahi.
     console.log(`[QuoteRequestService] Photo request SMS dispatched to Tenant phone: ${residentPhone || 'N/A'} (Manager email NOT notified: ${managerEmail || 'N/A'})`,);

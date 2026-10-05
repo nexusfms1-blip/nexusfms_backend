@@ -252,7 +252,7 @@ const submitPublicQuoteUpload = async (req, res, next) => {
 
     const [admins] = await connection.query("SELECT id FROM users WHERE role = 'OFFICE_ADMIN'");
     const [woRows] = await connection.query(
-      `SELECT id, job_number, title, priority, property_address, resident_name, contact_phone, contact_phone as resident_phone, contact_email, contact_email as resident_email, assigned_staff_id, description 
+      `SELECT id, job_number, title, priority, property_address, resident_name, contact_phone, contact_phone as resident_phone, contact_email, contact_email as resident_email, assigned_staff_id, description, manager_name, manager_email, original_sender_email
        FROM work_orders 
        WHERE id = ?`,
       [workOrderId]
@@ -324,6 +324,30 @@ const submitPublicQuoteUpload = async (req, res, next) => {
       .catch((err) => {
         console.warn('[N8N_WEBHOOK] Failed to dispatch QUOTE_PHOTOS_UPLOADED admin alert:', err.message);
       });
+
+    // --- NEW CODE: Step 2 (Photos Uploaded email to Manager) ---
+    const managerEmail = wo.manager_email || wo.original_sender_email;
+    if (managerEmail) {
+      notificationService.dispatch({
+        recipientUserId: null,
+        recipientRole: 'PROPERTY_MANAGER',
+        type: 'QUOTE_PHOTOS_UPLOADED_ACK',
+        title: 'Nexus FMS - Tenant Photos Uploaded',
+        messageTemplate: `The tenant has uploaded the photos for the maintenance request.\n\nWork Order: ${wo.job_number || 'N/A'} - ${jobTitle}\nProperty: ${resAddress}\n\nWe are reviewing them and will send a quote soon.`,
+        structuredData: {
+          jobNumber: wo.job_number,
+          title: jobTitle,
+          propertyAddress: resAddress
+        },
+        actionUrl: null,
+        relatedEntityType: 'work_orders',
+        relatedEntityId: workOrderId,
+        channels: ['EMAIL'],
+        contactEmail: managerEmail,
+        contactPhone: null
+      }).catch(err => console.warn('[submitPublicQuoteUpload] Manager Email Error:', err.message));
+    }
+    // --- END NEW CODE ---
 
     res.status(200).json({
       success: true,
