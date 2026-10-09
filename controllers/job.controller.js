@@ -676,7 +676,7 @@ const updateJobStatus = async (req, res, next) => {
     // Strict Role-Based Field Filtering
     // Only OFFICE_ADMIN can update quote amount
     let quoteVal = quote_amount || quoteAmount;
-    if (req.user.role !== 'OFFICE_ADMIN') {
+    if (req.user && req.user.role === 'MAINTENANCE_STAFF') {
       quoteVal = undefined; // Strip it out for OFFICE_TEAM and MAINTENANCE_STAFF
     }
 

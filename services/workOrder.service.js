@@ -75,7 +75,7 @@ const createWorkOrderEntity = async (data, user = null, dbConnection = null) => 
     if (resRows.length > 0) {
       const resObj = resRows[0];
       resId = resObj.id;
-      resName = resObj.full_name;
+      if (!resName) resName = resObj.full_name;
       resPhone = resObj.phone;
       resAddress = resObj.address;
       if (resObj.email) resEmail = resObj.email;
@@ -84,7 +84,7 @@ const createWorkOrderEntity = async (data, user = null, dbConnection = null) => 
 
   // 2. If resident_id is NOT passed, auto-link or create resident record in residents table
   if (!resId && resName && resPhone && resAddress) {
-    const [existingRes] = await db.query('SELECT id FROM residents WHERE phone = ? OR full_name = ?', [resPhone, resName]);
+    const [existingRes] = await db.query('SELECT id FROM residents WHERE phone = ? AND full_name = ?', [resPhone, resName]);
     if (existingRes.length > 0) {
       resId = existingRes[0].id;
     } else {
