@@ -10,6 +10,7 @@ const {
   cancelJob,
   getAssignmentHistory,
   resendQuoteRequest,
+  sendQuoteToManager,
 } = require('../controllers/job.controller');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth.middleware');
 
@@ -30,6 +31,9 @@ router.post('/', authorizeRoles('OFFICE_ADMIN', 'OFFICE_TEAM'), createJob);
 
 // Resend Quote Photo Request (Office Admin & Office Team)
 router.post('/:id/resend-quote-request', authorizeRoles('OFFICE_ADMIN', 'OFFICE_TEAM'), resendQuoteRequest);
+
+// Send Quote to Property Manager (Office Admin & Office Team)
+router.post('/:id/send-quote-to-manager', authorizeRoles('OFFICE_ADMIN', 'OFFICE_TEAM'), sendQuoteToManager);
 
 // Move Stage (Office Admin, Office Team & Maintenance Staff)
 router.put('/:id/stage', authorizeRoles('OFFICE_ADMIN', 'OFFICE_TEAM', 'MAINTENANCE_STAFF'), moveJobStage);

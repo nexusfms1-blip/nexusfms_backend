@@ -657,6 +657,21 @@ const dispatchN8NWebhook = async (eventType, payload) => {
     }
   }
 
+  if (eventType === 'QUOTE_SENT_TO_MANAGER') {
+    const frontendBase = getFrontendBaseUrl();
+    const mgrEmail = formattedPayload.managerEmail || formattedPayload.recipientEmail || formattedPayload.to || formattedPayload.email || '';
+    formattedPayload.recipientEmail = mgrEmail;
+    formattedPayload.to = mgrEmail;
+    formattedPayload.email = mgrEmail;
+    formattedPayload.actionUrl = `${frontendBase}/admin/pipeline?stage=Completed Quotes`;
+    if (formattedPayload.data && typeof formattedPayload.data === 'object') {
+      formattedPayload.data.to = mgrEmail;
+      formattedPayload.data.email = mgrEmail;
+      formattedPayload.data.recipientEmail = mgrEmail;
+      formattedPayload.data.actionUrl = formattedPayload.actionUrl;
+    }
+  }
+
   if (eventType === 'ADMIN_OFFICE_ALERT') {
     const frontendBase = getFrontendBaseUrl();
     const workOrderId = formattedPayload.workOrderId || formattedPayload.entityId || formattedPayload.relatedEntityId || null;
@@ -664,6 +679,8 @@ const dispatchN8NWebhook = async (eventType, payload) => {
     if (workOrderId && !formattedPayload.actionUrl) {
       if (formattedPayload.alertType === 'QUOTE_PHOTOS_UPLOADED') {
         formattedPayload.actionUrl = `${frontendBase}/admin/pipeline?stage=READY_TO_QUOTE`;
+      } else if (formattedPayload.alertType === 'QUOTE_SENT_TO_MANAGER') {
+        formattedPayload.actionUrl = `${frontendBase}/admin/pipeline?stage=Completed Quotes`;
       } else if (formattedPayload.alertType === 'BOOKING_CONFIRMED') {
         formattedPayload.actionUrl = `${frontendBase}/admin/calendar`;
       } else if (formattedPayload.alertType === 'JOB_COMPLETED') {

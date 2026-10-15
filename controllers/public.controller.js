@@ -328,23 +328,24 @@ const submitPublicQuoteUpload = async (req, res, next) => {
     // --- NEW CODE: Step 2 (Photos Uploaded email to Manager) ---
     const managerEmail = wo.manager_email || wo.original_sender_email;
     if (managerEmail) {
-      notificationService.dispatch({
-        recipientUserId: null,
-        recipientRole: 'PROPERTY_MANAGER',
-        type: 'QUOTE_PHOTOS_UPLOADED_ACK',
-        title: 'Nexus FMS - Tenant Photos Uploaded',
-        messageTemplate: `The tenant has uploaded the photos for the maintenance request.\n\nWork Order: ${wo.job_number || 'N/A'} - ${jobTitle}\nProperty: ${resAddress}\n\nWe are reviewing them and will send a quote soon.`,
-        structuredData: {
-          jobNumber: wo.job_number,
-          title: jobTitle,
-          propertyAddress: resAddress
-        },
-        actionUrl: null,
-        relatedEntityType: 'work_orders',
-        relatedEntityId: workOrderId,
-        channels: ['EMAIL'],
-        contactEmail: managerEmail,
-        contactPhone: null
+      dispatchN8NWebhook('ADMIN_OFFICE_ALERT', {
+        alertType: 'QUOTE_PHOTOS_UPLOADED_MANAGER',
+        recipientEmail: managerEmail,
+        to: managerEmail,
+        email: managerEmail,
+        workOrderId,
+        jobNumber: wo.job_number,
+        jobTitle,
+        propertyAddress: resAddress,
+        residentName: resName,
+        managerName: wo.manager_name,
+        managerEmail,
+        photoCount: savedMediaList.length,
+        photoUrls: savedMediaList.map(m => m.filePath).filter(Boolean),
+        subject: `[Nexus FMS] Tenant Photos Uploaded - Job #${wo.job_number || workOrderId}`,
+        headline: 'Tenant Has Uploaded Photos',
+        message: `Dear ${wo.manager_name || 'Property Manager'},\n\nThe tenant (${resName}) has uploaded ${savedMediaList.length} photo(s) for the maintenance request.\n\nWork Order: #${wo.job_number || 'N/A'} - ${jobTitle}\nProperty: ${resAddress}\n\nWe are reviewing them and will send you a quote shortly.\n\nBest regards,\nNexus FMS Team`,
+        actionUrl: `${frontendBaseUrl}/admin/pipeline?stage=READY_TO_QUOTE`,
       }).catch(err => console.warn('[submitPublicQuoteUpload] Manager Email Error:', err.message));
     }
     // --- END NEW CODE ---
@@ -779,6 +780,32 @@ const submitPublicBooking = async (req, res, next) => {
       .catch((err) => {
         console.warn('[N8N_WEBHOOK] Failed to dispatch BOOKING_CONFIRMED admin alert:', err.message);
       });
+
+    // 7. Dispatch booking confirmation email to Property Manager via n8n
+    const propMgrEmail = targetSenderEmail || mgrEmail || woRows[0]?.manager_email || woRows[0]?.original_sender_email;
+    if (propMgrEmail) {
+      dispatchN8NWebhook('ADMIN_OFFICE_ALERT', {
+        alertType: 'BOOKING_CONFIRMED_MANAGER',
+        recipientEmail: propMgrEmail,
+        to: propMgrEmail,
+        email: propMgrEmail,
+        workOrderId,
+        jobNumber: jobNum || `WO-${workOrderId.substring(0, 6)}`,
+        jobTitle,
+        propertyAddress: resAddress,
+        residentName: resName,
+        managerName: mgrName || woRows[0]?.manager_name,
+        managerEmail: propMgrEmail,
+        technicianName: techName,
+        scheduledDate: dateVal,
+        scheduledTimeSlot: slotVal,
+        subject: `[Nexus FMS] Appointment Confirmed: #${jobNum || workOrderId} - ${dateVal} (${slotVal})`,
+        headline: 'Tenant Appointment Confirmed',
+        message: `Dear ${mgrName || woRows[0]?.manager_name || 'Property Manager'},\n\nThe tenant (${resName}) has confirmed their maintenance appointment.\n\nWork Order: #${jobNum || workOrderId} (${jobTitle})\nProperty: ${resAddress}\nScheduled Date: ${dateVal}\nTime Slot: ${slotVal}\nAssigned Technician: ${techName}\n\nOur technician will attend the property at the scheduled time.\n\nBest regards,\nNexus FMS Team`,
+      }).catch((err) => {
+        console.warn('[N8N_WEBHOOK] Failed to dispatch BOOKING_CONFIRMED to manager:', err.message);
+      });
+    }
 
     res.status(200).json({
       success: true,

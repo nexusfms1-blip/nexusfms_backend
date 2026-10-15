@@ -23,6 +23,52 @@ const formatDateToISO = (d) => {
   return `${y}-${m}-${day}`;
 };
 
+// Helper to format job title matching Asana & client specifications: [Ref] / [Agent] - [Issue]
+const formatJobTitle = (rawTitle, jobNumber, managerName, address, description) => {
+  if (!rawTitle) rawTitle = '';
+  let str = String(rawTitle).trim();
+
+  if (/^[A-Za-z0-9_-]+\s*\/\s*[^-\n]+-[^-]+$/.test(str)) {
+    return str;
+  }
+
+  let issue = str
+    .replace(/^WORK\s+ORDERS?\s*[-:]?\s*/i, '')
+    .replace(/^Works?\s+Order\s+(?:for\s+)?/i, '')
+    .replace(/^Maintenance\s+Request\s*[-:]?\s*/i, '')
+    .replace(/^Job\s+Request\s*[-:]?\s*/i, '')
+    .trim();
+
+  if (issue.includes(':')) {
+    const parts = issue.split(':');
+    issue = parts[parts.length - 1].trim();
+  } else if (issue.includes(' - ')) {
+    const parts = issue.split(' - ');
+    issue = parts[parts.length - 1].trim();
+  }
+
+  if (address) {
+    const firstAddrPart = address.split(',')[0].trim();
+    if (firstAddrPart && issue.toLowerCase().includes(firstAddrPart.toLowerCase())) {
+      issue = issue.replace(new RegExp(firstAddrPart, 'i'), '').trim();
+      issue = issue.replace(/^[-:, ]+/, '').trim();
+    }
+  }
+
+  if (!issue || issue.length < 2 || /^\d+\s+[A-Za-z]+/.test(issue)) {
+    if (description && description.length > 3) {
+      issue = description.split(/[\r\n.]/)[0].slice(0, 40).trim();
+    } else {
+      issue = 'Maintenance Request';
+    }
+  }
+
+  const ref = jobNumber || 'WO';
+  const agent = (managerName || 'Agent').trim();
+
+  return `${ref} / ${agent} - ${issue}`;
+};
+
 // Helper to format raw database row to Frontend job object
 const formatJobRow = (r, role) => {
   const assignedStaffIds = r.assigned_staff_ids 
@@ -33,7 +79,7 @@ const formatJobRow = (r, role) => {
     id: r.id,
     jobNumber: r.job_number,
     section: r.pipeline_stage, // Maps to 5 Kanban stages
-    title: r.title,
+    title: formatJobTitle(r.title, r.job_number, r.manager_name, r.live_property_address || r.property_address, r.description),
     tenantId: r.resident_id || null,
     tenantName: r.live_resident_name || r.resident_name,
     contactPhone: r.live_contact_phone || r.contact_phone,
@@ -51,7 +97,9 @@ const formatJobRow = (r, role) => {
     assignedStaffName: r.staff_name || null,
     assignedStaffColor: r.staff_color || '#009bf2',
     managerName: r.manager_name || null,
-      managerEmail: r.manager_email || r.original_sender_email || null,
+    managerEmail: r.manager_email || r.original_sender_email || null,
+    managerApprovalStatus: r.manager_approval_status || 'PENDING',
+    managerApprovalNotes: r.manager_approval_notes || null,
     quoteAmount: r.quote_amount ? parseFloat(r.quote_amount) : null,
     scheduledDate: formatDateToISO(r.scheduled_date || r.booked_date || r.appointment_date),
     scheduledTimeSlot: r.scheduled_time_slot || r.booked_time_slot || r.time_slot || null,
@@ -397,7 +445,19 @@ const moveJobStage = async (req, res, next) => {
     const { section, pipeline_stage } = req.body;
     const newStage = pipeline_stage || section;
 
-    const allowedStages = ['Quotes', 'Ready to Quote', 'READY_TO_QUOTE', 'Completed Quotes', 'Jobs', 'Completed Jobs', 'Jobs Waiting Booking', 'Invoiced', 'Invoice'];
+    const allowedStages = [
+      'Quotes',
+      'Ready to Quote',
+      'READY_TO_QUOTE',
+      'Completed Quotes',
+      'Jobs',
+      'Completed Jobs',
+      'Jobs Waiting Booking',
+      'Jobs Awaiting Booking',
+      'Waiting Job Booking',
+      'Invoiced',
+      'Invoice'
+    ];
     if (!newStage || !allowedStages.includes(newStage)) {
       return res.status(400).json({
         success: false,
@@ -408,6 +468,9 @@ const moveJobStage = async (req, res, next) => {
     let normalizedStage = newStage === 'Invoice' ? 'Invoiced' : newStage;
     if (normalizedStage === 'Ready to Quote') {
       normalizedStage = 'READY_TO_QUOTE';
+    }
+    if (normalizedStage === 'Jobs Awaiting Booking' || normalizedStage === 'Waiting Job Booking') {
+      normalizedStage = 'Jobs Waiting Booking';
     }
 
     const [existing] = await pool.query('SELECT id, assigned_staff_id, pipeline_stage FROM work_orders WHERE id = ?', [id]);
@@ -449,18 +512,64 @@ const moveJobStage = async (req, res, next) => {
       });
     }
 
-    // When admin moves quote to Completed Quotes: trigger single booking request to resident (if not already sent)
+    // Completed Quotes: Quote prepared & sent to Property Manager. Waiting for manager approval.
+    // NOTE: Resident does NOT receive a booking link here!
     if (normalizedStage === 'Completed Quotes' && existing[0].pipeline_stage !== 'Completed Quotes') {
+      console.log(`[moveJobStage] Work order #${id} moved to Completed Quotes. Waiting for manager approval (no booking link sent).`);
+    }
+
+    // Jobs Waiting Booking: Manager has approved quote! Now trigger booking request SMS to resident.
+    if ((normalizedStage === 'Jobs Waiting Booking' || normalizedStage === 'Jobs Awaiting Booking' || normalizedStage === 'Waiting Job Booking') && existing[0].pipeline_stage !== normalizedStage) {
       const [existingBooking] = await pool.query(
         'SELECT id, status FROM booking_requests WHERE work_order_id = ?',
         [id]
       );
       if (existingBooking.length === 0 || existingBooking[0].status === 'EXPIRED') {
         await BookingRequestService.triggerAutoBookingRequest(id).catch(err => {
-          console.error('[moveJobStage] Error triggering auto booking request on Completed Quotes:', err.message);
+          console.error('[moveJobStage] Error triggering auto booking request on Jobs Waiting Booking:', err.message);
         });
       } else {
         console.log(`[moveJobStage] Booking request already exists for work order #${id} (status: ${existingBooking[0].status}), skipping duplicate trigger.`);
+      }
+
+      // Notify Property Manager that quote was approved and booking link sent to tenant
+      try {
+        const [woFull] = await pool.query(
+          `SELECT w.id, w.job_number, w.title, w.property_address, w.resident_name, w.manager_name, w.manager_email, w.original_sender_email, w.assigned_staff_id,
+                  u.full_name as staff_name
+           FROM work_orders w
+           LEFT JOIN staff_profiles sp ON w.assigned_staff_id = sp.id
+           LEFT JOIN users u ON sp.user_id = u.id
+           WHERE w.id = ?`,
+          [id]
+        );
+        if (woFull.length > 0) {
+          const wo = woFull[0];
+          const targetMgrEmail = wo.manager_email || wo.original_sender_email;
+          const assignedTech = wo.staff_name || 'Allocated Technician';
+          if (targetMgrEmail) {
+            const approvalMsg = `Dear ${wo.manager_name || 'Property Manager'},\n\nThank you for approving the quotation for work order #${wo.job_number || id} (${wo.title}) at ${wo.property_address}.\n\nTechnician: ${assignedTech}\nThe resident (${wo.resident_name || 'Tenant'}) has been sent the calendar booking link via SMS. We will notify you once the appointment time slot is confirmed.\n\nBest regards,\nNexus FMS Team`;
+            dispatchN8NWebhook('ADMIN_OFFICE_ALERT', {
+              alertType: 'QUOTE_APPROVED_CONFIRMATION',
+              recipientEmail: targetMgrEmail,
+              to: targetMgrEmail,
+              email: targetMgrEmail,
+              workOrderId: id,
+              jobNumber: wo.job_number,
+              jobTitle: wo.title,
+              propertyAddress: wo.property_address,
+              residentName: wo.resident_name,
+              managerName: wo.manager_name,
+              managerEmail: targetMgrEmail,
+              technicianName: assignedTech,
+              subject: `[Nexus FMS] Quote Approved & Booking Link Sent - Job #${wo.job_number || id}`,
+              headline: 'Quote Approved - Booking Link Sent to Tenant',
+              message: approvalMsg,
+            }).catch(e => console.warn('[moveJobStage] Manager approval confirmation email error:', e.message));
+          }
+        }
+      } catch (emErr) {
+        console.warn('[moveJobStage] Error sending manager approval confirmation email:', emErr.message);
       }
     }
 
@@ -642,6 +751,8 @@ const updateJobStatus = async (req, res, next) => {
       property_address, address, priority,
       resident_id, residentId, resident_name, tenantName,
       contact_phone, contactPhone, contact_email, contactEmail,
+      manager_approval_status, managerApprovalStatus,
+      manager_approval_notes, managerApprovalNotes,
     } = req.body;
 
     const [existing] = await pool.query(
@@ -788,6 +899,16 @@ const updateJobStatus = async (req, res, next) => {
       updates.push('contact_email = ?');
       values.push(emailVal);
     }
+    const approvalStatusVal = manager_approval_status !== undefined ? manager_approval_status : managerApprovalStatus;
+    if (approvalStatusVal !== undefined) {
+      updates.push('manager_approval_status = ?');
+      values.push(approvalStatusVal);
+    }
+    const approvalNotesVal = manager_approval_notes !== undefined ? manager_approval_notes : managerApprovalNotes;
+    if (approvalNotesVal !== undefined) {
+      updates.push('manager_approval_notes = ?');
+      values.push(approvalNotesVal);
+    }
 
     if (updates.length > 0) {
       let updateSql = `UPDATE work_orders SET ${updates.join(', ')} WHERE id = ?`;
@@ -820,6 +941,47 @@ const updateJobStatus = async (req, res, next) => {
     const targetSchedSlot = schedSlot !== undefined ? (schedSlot === null ? null : schedSlot) : prevSchedSlot;
 
     if (rawStaffId !== undefined && targetStaffId !== prevStaffId) {
+      // 0. Notify Property Manager that a technician has been assigned (non-blocking)
+      if (targetStaffId !== null && targetStaffId !== undefined) {
+        (async () => {
+          try {
+            const [mgrRows] = await pool.query(
+              `SELECT w.job_number, w.title, w.property_address, w.resident_name, w.manager_name, w.manager_email, w.original_sender_email,
+                      u.full_name AS tech_name
+               FROM work_orders w
+               LEFT JOIN staff_profiles sp ON sp.id = ?
+               LEFT JOIN users u ON sp.user_id = u.id
+               WHERE w.id = ?`,
+              [targetStaffId, id]
+            );
+            const m = mgrRows[0];
+            const mgrEmail = m && (m.manager_email || m.original_sender_email);
+            if (!mgrEmail) return;
+            const techName = m.tech_name || 'our technician';
+            const techMsg = `Dear ${m.manager_name || 'Property Manager'},\n\nA technician has been assigned to work order #${m.job_number || id} (${m.title}).\n\nProperty: ${m.property_address || '-'}\nTenant: ${m.resident_name || '-'}\nAssigned Technician: ${techName}\n\nThe tenant will book an appointment slot with this technician. We will confirm the date and time once booked.\n\nBest regards,\nNexus FMS Team`;
+            await dispatchN8NWebhook('ADMIN_OFFICE_ALERT', {
+              alertType: 'TECHNICIAN_ASSIGNED_MANAGER',
+              recipientEmail: mgrEmail,
+              to: mgrEmail,
+              email: mgrEmail,
+              workOrderId: id,
+              jobNumber: m.job_number,
+              jobTitle: m.title,
+              propertyAddress: m.property_address,
+              residentName: m.resident_name,
+              managerName: m.manager_name,
+              managerEmail: mgrEmail,
+              technicianName: techName,
+              subject: `[Nexus FMS] Technician Assigned - Job #${m.job_number || id}`,
+              headline: `Technician Assigned: ${techName}`,
+              message: techMsg,
+            });
+            console.log(`[updateJobStatus] Technician-assigned email sent to manager ${mgrEmail}`);
+          } catch (e) {
+            console.warn('[updateJobStatus] Manager technician-assigned email error:', e.message);
+          }
+        })();
+      }
       // 1. Notify previous technician that job was reassigned away from them
       if (prevStaffId !== null && prevStaffId !== undefined) {
         const [spUser] = await pool.query(
@@ -1063,17 +1225,35 @@ const updateJobStatus = async (req, res, next) => {
       }
     }
 
+    // Completed Quotes: Quote prepared & sent to manager. Waiting for manager approval.
     if (newStage === 'Completed Quotes' && existingJob.pipeline_stage !== 'Completed Quotes') {
+      console.log(`[updateJob] Work order #${id} set to Completed Quotes. Waiting for manager approval (no booking link sent).`);
+      const [admins] = await pool.query("SELECT id FROM users WHERE role = 'OFFICE_ADMIN'");
+      for (const admin of admins) {
+        await notificationService.createNotification({
+          recipientUserId: admin.id,
+          type: 'QUOTE_SENT',
+          title: 'Quote prepared & sent to manager',
+          message: `Quote for ${existingJob.title} is in Completed Quotes, awaiting manager approval.`,
+          relatedEntityType: 'work_orders',
+          relatedEntityId: id,
+          actionUrl: `/admin/pipeline?stage=Completed Quotes`
+        });
+      }
+    }
+
+    // Jobs Waiting Booking: Manager has approved quote! Trigger booking request SMS to resident.
+    if ((newStage === 'Jobs Waiting Booking' || newStage === 'Jobs Awaiting Booking' || newStage === 'Waiting Job Booking') && existingJob.pipeline_stage !== newStage) {
       const [existingBooking] = await pool.query(
         'SELECT id, status FROM booking_requests WHERE work_order_id = ?',
         [id]
       );
       if (existingBooking.length === 0 || existingBooking[0].status === 'EXPIRED') {
         await BookingRequestService.triggerAutoBookingRequest(id).catch(err => {
-          console.error('[updateJobStatus] Error triggering auto booking request on Completed Quotes:', err.message);
+          console.error('[updateJob] Error triggering auto booking request on Jobs Waiting Booking:', err.message);
         });
       } else {
-        console.log(`[updateJobStatus] Booking request already exists for work order #${id} (status: ${existingBooking[0].status}), skipping duplicate trigger.`);
+        console.log(`[updateJob] Booking request already exists for work order #${id} (status: ${existingBooking[0].status}), skipping duplicate trigger.`);
       }
 
       const [admins] = await pool.query("SELECT id FROM users WHERE role = 'OFFICE_ADMIN'");
@@ -1081,11 +1261,11 @@ const updateJobStatus = async (req, res, next) => {
         await notificationService.createNotification({
           recipientUserId: admin.id,
           type: 'QUOTE_APPROVED',
-          title: 'Quote approved and ready for booking',
-          message: `Quote for ${existingJob.title} is approved.`,
+          title: 'Quote approved by manager - booking link sent',
+          message: `Job #${existingJob.job_number || id} is approved. Booking link sent to tenant.`,
           relatedEntityType: 'work_orders',
           relatedEntityId: id,
-          actionUrl: `/admin/pipeline?stage=Completed Quotes`
+          actionUrl: `/admin/pipeline?stage=Jobs Waiting Booking`
         });
       }
     }
@@ -1507,6 +1687,145 @@ const resendQuoteRequest = async (req, res, next) => {
   }
 };
 
+// @desc    Send Formal Quote Email to Property Manager & Move to Completed Quotes
+// @route   POST /api/v1/jobs/:id/send-quote-to-manager
+// @access  Private (Admin & Office Team)
+const sendQuoteToManager = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { quote_amount, quoteAmount, manager_email, managerEmail, notes } = req.body;
+
+    const [woRows] = await pool.query(
+      `SELECT id, job_number, title, property_address, resident_name, contact_phone, contact_email,
+              manager_name, manager_email, original_sender_email, quote_amount, description, pipeline_stage
+       FROM work_orders WHERE id = ?`,
+      [id]
+    );
+
+    if (woRows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: `Work order not found with ID ${id}`,
+      });
+    }
+
+    const wo = woRows[0];
+    const targetQuoteAmount = (quote_amount !== undefined && quote_amount !== null) 
+      ? parseFloat(quote_amount) 
+      : ((quoteAmount !== undefined && quoteAmount !== null) ? parseFloat(quoteAmount) : (wo.quote_amount !== null ? parseFloat(wo.quote_amount) : 0));
+
+    const targetManagerEmail = (manager_email || managerEmail || wo.manager_email || wo.original_sender_email || '').trim();
+
+    if (!targetManagerEmail) {
+      return res.status(400).json({
+        success: false,
+        message: 'Property Manager email is required to send quote. Please provide manager email.',
+      });
+    }
+
+    // Update quote_amount, manager_email and pipeline_stage to 'Completed Quotes'
+    await pool.query(
+      `UPDATE work_orders SET 
+        quote_amount = ?, 
+        manager_email = COALESCE(?, manager_email),
+        pipeline_stage = 'Completed Quotes'
+       WHERE id = ?`,
+      [targetQuoteAmount, targetManagerEmail, id]
+    );
+
+    // Fetch tenant uploaded photos to include in email
+    const [mediaRows] = await pool.query(
+      'SELECT file_path, file_name, media_type FROM customer_media_uploads WHERE work_order_id = ?',
+      [id]
+    );
+    const photoUrls = mediaRows.map(m => m.file_path).filter(Boolean);
+
+    const frontendBaseUrl = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://www.nexusfms.com').replace(/\/$/, '');
+    const jobNumberStr = wo.job_number || `WO-${id}`;
+    const formattedAmount = targetQuoteAmount > 0 ? `£${targetQuoteAmount.toFixed(2)}` : 'Quote under review';
+    const mgrName = wo.manager_name || 'Property Manager';
+
+    // Dispatch quote email notification to Property Manager via n8n & notification service
+    const quoteEmailSubject = `[Nexus FMS] Formal Quotation: #${jobNumberStr} - ${wo.title}`;
+    const quoteEmailHeadline = `Quotation for ${wo.title}`;
+    const quoteEmailMessage = `Dear ${mgrName},\n\nPlease find our formal quotation for the maintenance work order at ${wo.property_address}.\n\nWork Order: #${jobNumberStr}\nProperty: ${wo.property_address}\nTenant: ${wo.resident_name || 'Resident'}\nTotal Estimated Charge: ${formattedAmount}\n\n${notes ? `Notes: ${notes}\n\n` : ''}Photos and documentation have been attached. Please reply directly to this email to approve the quotation so we can schedule the technician appointment.\n\nBest regards,\nNexus FMS Team`;
+
+    // 1. Dispatch ADMIN_OFFICE_ALERT with alertType: 'QUOTE_SENT_TO_MANAGER' and direct recipientEmail
+    await dispatchN8NWebhook('ADMIN_OFFICE_ALERT', {
+      alertType: 'QUOTE_SENT_TO_MANAGER',
+      recipientEmail: targetManagerEmail,
+      to: targetManagerEmail,
+      email: targetManagerEmail,
+      workOrderId: id,
+      jobNumber: jobNumberStr,
+      jobTitle: wo.title,
+      propertyAddress: wo.property_address,
+      residentName: wo.resident_name,
+      managerName: mgrName,
+      managerEmail: targetManagerEmail,
+      quoteAmount: targetQuoteAmount,
+      formattedAmount,
+      photoUrls,
+      subject: quoteEmailSubject,
+      headline: quoteEmailHeadline,
+      message: quoteEmailMessage,
+      actionUrl: `${frontendBaseUrl}/admin/pipeline?stage=Completed Quotes`,
+    }).catch(err => console.warn('[sendQuoteToManager] n8n alert error:', err.message));
+
+    // 2. Dispatch dedicated notification event
+    notificationService.dispatch({
+      recipientUserId: null,
+      recipientRole: 'PROPERTY_MANAGER',
+      type: 'QUOTE_SENT_TO_MANAGER',
+      title: quoteEmailHeadline,
+      messageTemplate: quoteEmailMessage,
+      structuredData: {
+        jobNumber: jobNumberStr,
+        title: wo.title,
+        propertyAddress: wo.property_address,
+        quoteAmount: targetQuoteAmount,
+        formattedAmount,
+        managerEmail: targetManagerEmail,
+        photoUrls,
+      },
+      actionUrl: `${frontendBaseUrl}/admin/pipeline?stage=Completed Quotes`,
+      relatedEntityType: 'work_orders',
+      relatedEntityId: id,
+      channels: ['EMAIL'],
+      contactEmail: targetManagerEmail,
+      contactPhone: null,
+    }).catch(err => console.warn('[sendQuoteToManager] notification dispatch error:', err.message));
+
+    // 3. Notify Office Admins that quote was dispatched to manager
+    const [admins] = await pool.query("SELECT id FROM users WHERE role = 'OFFICE_ADMIN'");
+    for (const admin of admins) {
+      await notificationService.createNotification({
+        recipientUserId: admin.id,
+        type: 'QUOTE_SENT',
+        title: 'Quote sent to Property Manager',
+        message: `Quote (${formattedAmount}) for #${jobNumberStr} sent to ${targetManagerEmail}. Work order moved to Completed Quotes.`,
+        relatedEntityType: 'work_orders',
+        relatedEntityId: id,
+        actionUrl: `/admin/pipeline?stage=Completed Quotes`,
+      }).catch(e => console.warn('[sendQuoteToManager] admin notif error:', e.message));
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `Quote successfully sent to ${targetManagerEmail}. Work order moved to Completed Quotes.`,
+      data: {
+        workOrderId: id,
+        jobNumber: jobNumberStr,
+        managerEmail: targetManagerEmail,
+        quoteAmount: targetQuoteAmount,
+        pipelineStage: 'Completed Quotes',
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   getJobs,
   getJobById,
@@ -1517,5 +1836,6 @@ module.exports = {
   cancelJob,
   getAssignmentHistory,
   resendQuoteRequest,
+  sendQuoteToManager,
 };
 

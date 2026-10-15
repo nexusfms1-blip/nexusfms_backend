@@ -213,7 +213,7 @@ const createWorkOrderEntity = async (data, user = null, dbConnection = null) => 
     }
   }
 
-  if (stage === 'Jobs') {
+  if (stage === 'Jobs Waiting Booking' || stage === 'Jobs') {
     BookingRequestService.triggerAutoBookingRequest(workOrderId);
   }
 

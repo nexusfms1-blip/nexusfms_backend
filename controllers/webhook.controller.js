@@ -236,10 +236,34 @@ const handleIncomingEmailQuote = async (req, res) => {
     let createdJobNumber = null;
 
     try {
+      // Clean title format to match client & Asana specification: [Ref / Agent - Issue]
+      let cleanJobTitle = normalizedTitle
+        .replace(/^works?\s+orders?\s*[-:]?\s*(?:maintenance\s+request\s*[-:]?\s*)?/i, '')
+        .trim();
+
+      if (normalizedAddress) {
+        const cleanAddr = normalizedAddress.split(',')[0].trim();
+        if (cleanAddr && cleanJobTitle.toLowerCase().includes(cleanAddr.toLowerCase())) {
+          const parts = cleanJobTitle.split(/[-:]/);
+          if (parts.length > 1) {
+            cleanJobTitle = parts[parts.length - 1].trim();
+          }
+        }
+      }
+
+      const mgrAgent = (manager_name || '').trim();
+      const refNumber = req.body.work_order_reference || req.body.reference_number || req.body.reference || null;
+
+      if (refNumber && mgrAgent) {
+        cleanJobTitle = `${refNumber} / ${mgrAgent} - ${cleanJobTitle || 'Maintenance Request'}`;
+      } else if (mgrAgent && !cleanJobTitle.toLowerCase().includes(mgrAgent.toLowerCase())) {
+        cleanJobTitle = `${mgrAgent} - ${cleanJobTitle || 'Maintenance Request'}`;
+      }
+
       // 5. Call Shared Work Order Creation Service
       const creationResult = await createWorkOrderEntity(
         {
-          title: normalizedTitle,
+          title: cleanJobTitle || normalizedTitle,
           resident_name: normalizedResName,
           contact_phone: normalizedPhone,
           contact_email: contact_email || null,
