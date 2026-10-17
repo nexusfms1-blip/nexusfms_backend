@@ -6,6 +6,7 @@ const BookingRequestService = require('../services/bookingRequest.service');
 const { uploadMediaFile } = require('../services/cloudinary.service');
 const { dispatchN8NWebhook, getAdminAndOfficeRecipientEmail } = require('../services/webhook.service');
 const { createWorkOrderEntity } = require('../services/workOrder.service');
+const { buildWorkReference } = require('../utils/workReference');
 
 
 // Helper to format any date input to strict YYYY-MM-DD
@@ -23,50 +24,31 @@ const formatDateToISO = (d) => {
   return `${y}-${m}-${day}`;
 };
 
-// Helper to format job title matching Asana & client specifications: [Ref] / [Agent] - [Issue]
-const formatJobTitle = (rawTitle, jobNumber, managerName, address, description) => {
+// Helper to format job title matching client specifications:
+// JOB REFERENCE/DOMAIN OF WHO SENT IT-FIRST HALF OF POSTCODE - MAX 4 WORDS OF WHAT JOB ENTITLES
+const formatJobTitle = (rawTitle, jobNumber, managerName, address, description, senderEmail) => {
   if (!rawTitle) rawTitle = '';
   let str = String(rawTitle).trim();
 
-  if (/^[A-Za-z0-9_-]+\s*\/\s*[^-\n]+-[^-]+$/.test(str)) {
+  // If already in client format: REF/domain-POSTCODE - Words
+  if (/^[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+-[A-Za-z0-9]+\s*-\s*.+$/i.test(str)) {
     return str;
   }
 
-  let issue = str
-    .replace(/^WORK\s+ORDERS?\s*[-:]?\s*/i, '')
-    .replace(/^Works?\s+Order\s+(?:for\s+)?/i, '')
-    .replace(/^Maintenance\s+Request\s*[-:]?\s*/i, '')
-    .replace(/^Job\s+Request\s*[-:]?\s*/i, '')
-    .trim();
-
-  if (issue.includes(':')) {
-    const parts = issue.split(':');
-    issue = parts[parts.length - 1].trim();
-  } else if (issue.includes(' - ')) {
-    const parts = issue.split(' - ');
-    issue = parts[parts.length - 1].trim();
+  // If old format [Ref] / [Agent] - [Issue], extract only the issue part
+  let issueStr = str;
+  if (issueStr.includes(' / ') && issueStr.includes(' - ')) {
+    issueStr = issueStr.split(' - ').slice(1).join(' - ').trim();
   }
 
-  if (address) {
-    const firstAddrPart = address.split(',')[0].trim();
-    if (firstAddrPart && issue.toLowerCase().includes(firstAddrPart.toLowerCase())) {
-      issue = issue.replace(new RegExp(firstAddrPart, 'i'), '').trim();
-      issue = issue.replace(/^[-:, ]+/, '').trim();
-    }
-  }
-
-  if (!issue || issue.length < 2 || /^\d+\s+[A-Za-z]+/.test(issue)) {
-    if (description && description.length > 3) {
-      issue = description.split(/[\r\n.]/)[0].slice(0, 40).trim();
-    } else {
-      issue = 'Maintenance Request';
-    }
-  }
-
-  const ref = jobNumber || 'WO';
-  const agent = (managerName || 'Agent').trim();
-
-  return `${ref} / ${agent} - ${issue}`;
+  return buildWorkReference({
+    reference: jobNumber,
+    senderEmail: senderEmail,
+    address: address,
+    issue: issueStr || description,
+    managerName: managerName,
+    defaultJobNumber: jobNumber || 'WO',
+  });
 };
 
 // Helper to format raw database row to Frontend job object
@@ -79,7 +61,14 @@ const formatJobRow = (r, role) => {
     id: r.id,
     jobNumber: r.job_number,
     section: r.pipeline_stage, // Maps to 5 Kanban stages
-    title: formatJobTitle(r.title, r.job_number, r.manager_name, r.live_property_address || r.property_address, r.description),
+    title: formatJobTitle(
+      r.title,
+      r.job_number,
+      r.manager_name,
+      r.live_property_address || r.property_address,
+      r.description,
+      r.original_sender_email || r.manager_email
+    ),
     tenantId: r.resident_id || null,
     tenantName: r.live_resident_name || r.resident_name,
     contactPhone: r.live_contact_phone || r.contact_phone,
