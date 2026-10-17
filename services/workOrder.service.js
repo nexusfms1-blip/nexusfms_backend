@@ -141,7 +141,7 @@ const createWorkOrderEntity = async (data, user = null, dbConnection = null) => 
 
   // Generate unique job number & cryptographically strong 32-byte secure token
   const randomNumber = Math.floor(1000 + Math.random() * 9000);
-  const jobNumber = `JOB-2026-${randomNumber}`;
+  const jobNumber = data.job_number || data.jobNumber || `JOB-2026-${randomNumber}`;
   const secureToken = `tok_${crypto.randomBytes(32).toString('hex')}`;
 
   const [result] = await db.query(

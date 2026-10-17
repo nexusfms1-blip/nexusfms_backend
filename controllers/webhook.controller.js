@@ -6,6 +6,7 @@ const { Readable } = require('stream');
 const { pool } = require('../config/db');
 const { createWorkOrderEntity } = require('../services/workOrder.service');
 const { uploadMediaFile } = require('../services/cloudinary.service');
+const { buildWorkReference } = require('../utils/workReference');
 
 // Strict allowed MIME types for initial customer evidence attachments (P0-Attachments)
 const ALLOWED_MIME_TYPES = [
@@ -251,18 +252,28 @@ const handleIncomingEmailQuote = async (req, res) => {
         }
       }
 
-      const mgrAgent = (manager_name || '').trim();
+      const mgrDisplayName = manager_name || req.body.manager_name || 'Email Requester';
       const refNumber = req.body.work_order_reference || req.body.reference_number || req.body.reference || null;
 
-      if (refNumber && mgrAgent) {
-        cleanJobTitle = `${refNumber} / ${mgrAgent} - ${cleanJobTitle || 'Maintenance Request'}`;
-      } else if (mgrAgent && !cleanJobTitle.toLowerCase().includes(mgrAgent.toLowerCase())) {
-        cleanJobTitle = `${mgrAgent} - ${cleanJobTitle || 'Maintenance Request'}`;
-      }
+      // Pre-assign unique job number so it can act as the fallback reference if sender didn't include one
+      const randomNumber = Math.floor(1000 + Math.random() * 9000);
+      const preassignedJobNumber = `JOB-2026-${randomNumber}`;
+
+      // Client format: JOB REFERENCE/DOMAIN OF SENDER-FIRST HALF OF POSTCODE - MAX 4 WORDS OF JOB
+      // e.g. "WO-78123/foxtons-W1D - Kitchen sink leaking water"
+      cleanJobTitle = buildWorkReference({
+        reference: refNumber,
+        senderEmail: normalizedSenderEmail,
+        address: normalizedAddress,
+        issue: cleanJobTitle || normalizedTitle || normalizedDesc,
+        managerName: mgrDisplayName,
+        defaultJobNumber: preassignedJobNumber,
+      });
 
       // 5. Call Shared Work Order Creation Service
       const creationResult = await createWorkOrderEntity(
         {
+          job_number: preassignedJobNumber,
           title: cleanJobTitle || normalizedTitle,
           resident_name: normalizedResName,
           contact_phone: normalizedPhone,
@@ -273,7 +284,7 @@ const handleIncomingEmailQuote = async (req, res) => {
           pipeline_stage: 'Quotes',
           external_reference_id: normalizedRefId,
           original_sender_email: normalizedSenderEmail,
-          manager_name: manager_name || 'Email Requester',
+          manager_name: mgrDisplayName,
           manager_email: manager_email || normalizedSenderEmail,
         },
         null,
