@@ -93,16 +93,43 @@ const summariseJob = (text, maxWords = 4) => {
 
 /**
  * Attempts to extract a job reference from text (subject / body / title).
+ * Handles estate agent formats:
+ *   "Ref No: 76680"
+ *   "Ref No. 76680"
+ *   "Ref: 76680"
+ *   "Reference Number: 76680"
+ *   "Works Order: 76680"
+ *   "Works Order No: MC-9912"
+ *   "WO-78123"
  */
 const extractReferenceFromText = (text) => {
   if (!text || typeof text !== 'string') return '';
-  // Pattern like WO-12345, WO12345, JOB-12345
-  const directMatch = text.match(/\b((?:WO|REF|JOB)[-_]?\d{3,10})\b/i);
+
+  // 1. Direct code pattern with hyphen/separator (e.g. WO-78123, REF-912, JOB-8821)
+  const directMatch = text.match(/\b((?:WO|REF|JOB)[-_]\d{3,10})\b/i);
   if (directMatch) return directMatch[1].trim().toUpperCase();
 
-  // Pattern with keyword and separator e.g. "Works Order: MC-9182", "Ref: 9812", "Job #8821"
-  const match = text.match(/\b(?:works?\s*orders?|ref(?:erence)?|job|wo)[-:\s#]+([A-Za-z0-9_-]{2,25})\b/i);
-  if (match) return match[1].trim();
+  // 2. Line-by-line check (e.g. "Ref No: 76680" or "Ref: 76680" on its own line)
+  const lines = text.split(/\r?\n/);
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    const lineMatch = line.match(/^(?:ref(?:erence)?|works?\s*orders?|wo|job(?:\s*ref(?:erence)?)?)\s*(?:no\.?|num(?:ber)?|#)?\s*[:=-]\s*([A-Za-z0-9_-]{2,25})$/i);
+    if (lineMatch) {
+      const val = lineMatch[1].trim();
+      if (!/^(no|num|number|date|for|the|details)$/i.test(val)) return val;
+    }
+  }
+
+  // 3. Keyword followed by reference anywhere in text: "Ref No: 76680", "Works Order: 76680"
+  const labelMatch = text.match(/\b(?:works?\s*orders?|job|wo)?\s*(?:ref(?:erence)?|wo|job)\s*(?:no\.?|num(?:ber)?|#)?[\s:=#-]+([A-Za-z0-9_-]{2,25})\b/i);
+  if (labelMatch) {
+    const val = labelMatch[1].trim();
+    if (!/^(no|num|number|for|is|to|the|of|in|at|and|a|an|date|details)$/i.test(val)) return val;
+  }
+
+  // 4. Fallback direct match without separator (e.g. WO12345, REF12345)
+  const fallbackDirect = text.match(/\b((?:WO|REF|JOB)\d{3,10})\b/i);
+  if (fallbackDirect) return fallbackDirect[1].trim().toUpperCase();
 
   return '';
 };
@@ -111,10 +138,21 @@ const extractReferenceFromText = (text) => {
  * Builds the work reference string in client format:
  * JOB REFERENCE/DOMAIN OF WHO SENT IT-FIRST HALF OF POSTCODE - MAX 4 WORDS OF WHAT JOB ENTITLES
  */
-const buildWorkReference = ({ reference, senderEmail, address, issue, managerName, defaultJobNumber } = {}) => {
+const buildWorkReference = ({ reference, senderEmail, address, issue, managerName, defaultJobNumber, description, subject } = {}) => {
   let ref = (reference || '').toString().trim();
 
-  // If no reference passed, attempt extraction from issue/text
+  // If passed reference is a generic word like 'No' or 'null', clear it
+  if (/^(no|num|number|null|undefined|none)$/i.test(ref)) {
+    ref = '';
+  }
+
+  // If no reference passed, attempt extraction from description (body), subject, or issue text
+  if (!ref && description) {
+    ref = extractReferenceFromText(description);
+  }
+  if (!ref && subject) {
+    ref = extractReferenceFromText(subject);
+  }
   if (!ref && issue) {
     ref = extractReferenceFromText(issue);
   }
@@ -154,7 +192,7 @@ const buildWorkReference = ({ reference, senderEmail, address, issue, managerNam
     words = 'Maintenance Request';
   }
 
-  // Middle part: "domain-POSTCODE" (e.g. "martinco-B12" or "foxtons-W1D")
+  // Middle part: "domain-POSTCODE" (e.g. "martinco-B12" or "apmestates-B31" or "foxtons-W1D")
   const middle = [domain, postcode].filter(Boolean).join('-');
 
   // Format: "JOB REFERENCE/DOMAIN-POSTCODE - 4 WORDS"
