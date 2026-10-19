@@ -6,7 +6,7 @@ const { Readable } = require('stream');
 const { pool } = require('../config/db');
 const { createWorkOrderEntity } = require('../services/workOrder.service');
 const { uploadMediaFile } = require('../services/cloudinary.service');
-const { buildWorkReference } = require('../utils/workReference');
+const { buildWorkReference, extractReferenceFromText } = require('../utils/workReference');
 
 // Strict allowed MIME types for initial customer evidence attachments (P0-Attachments)
 const ALLOWED_MIME_TYPES = [
@@ -253,14 +253,26 @@ const handleIncomingEmailQuote = async (req, res) => {
       }
 
       const mgrDisplayName = manager_name || req.body.manager_name || 'Email Requester';
-      const refNumber = req.body.work_order_reference || req.body.reference_number || req.body.reference || null;
+      
+      // Look for external reference in payload (work_order_reference, reference_number, reference, job_reference)
+      // or extract directly from email description (body), subject, or title
+      let refNumber = req.body.work_order_reference || req.body.reference_number || req.body.reference || req.body.job_reference || null;
+      if (!refNumber && normalizedDesc) {
+        refNumber = extractReferenceFromText(normalizedDesc);
+      }
+      if (!refNumber && subject) {
+        refNumber = extractReferenceFromText(subject);
+      }
+      if (!refNumber && normalizedTitle) {
+        refNumber = extractReferenceFromText(normalizedTitle);
+      }
 
       // Pre-assign unique job number so it can act as the fallback reference if sender didn't include one
       const randomNumber = Math.floor(1000 + Math.random() * 9000);
       const preassignedJobNumber = `JOB-2026-${randomNumber}`;
 
       // Client format: JOB REFERENCE/DOMAIN OF SENDER-FIRST HALF OF POSTCODE - MAX 4 WORDS OF JOB
-      // e.g. "WO-78123/foxtons-W1D - Kitchen sink leaking water"
+      // e.g. "76680/apmestates-B31 - Kitchen Cupboards Peeling"
       cleanJobTitle = buildWorkReference({
         reference: refNumber,
         senderEmail: normalizedSenderEmail,
@@ -268,6 +280,8 @@ const handleIncomingEmailQuote = async (req, res) => {
         issue: cleanJobTitle || normalizedTitle || normalizedDesc,
         managerName: mgrDisplayName,
         defaultJobNumber: preassignedJobNumber,
+        description: normalizedDesc,
+        subject: subject,
       });
 
       // 5. Call Shared Work Order Creation Service
