@@ -384,6 +384,7 @@ const handleIncomingEmailQuote = async (req, res) => {
           pipeline_stage: 'Quotes',
           external_reference_id: normalizedRefId,
           original_sender_email: normalizedSenderEmail,
+          work_order_reference: refNumber,
           manager_name: mgrDisplayName,
           manager_email: manager_email || normalizedSenderEmail,
         },

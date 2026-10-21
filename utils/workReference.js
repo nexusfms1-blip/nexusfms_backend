@@ -105,30 +105,36 @@ const summariseJob = (text, maxWords = 4) => {
 const extractReferenceFromText = (text) => {
   if (!text || typeof text !== 'string') return '';
 
-  // 1. Direct code pattern with hyphen/separator (e.g. WO-78123, REF-912, JOB-8821)
-  const directMatch = text.match(/\b((?:WO|REF|JOB)[-_]\d{3,10})\b/i);
-  if (directMatch) return directMatch[1].trim().toUpperCase();
+  const cleanText = text.replace(/JOB-2026-\d{3,6}/gi, '');
 
-  // 2. Line-by-line check (e.g. "Ref No: 76680" or "Ref: 76680" on its own line)
+  // 1. Line-by-line check (e.g. "Ref No: 76680" or "Ref: 76680" or "Works Order: 76680")
   const lines = text.split(/\r?\n/);
   for (const rawLine of lines) {
     const line = rawLine.trim();
-    const lineMatch = line.match(/^(?:ref(?:erence)?|works?\s*orders?|wo|job(?:\s*ref(?:erence)?)?)\s*(?:no\.?|num(?:ber)?|#)?\s*[:=-]\s*([A-Za-z0-9_-]{2,25})$/i);
+    const lineMatch = line.match(/^(?:ref(?:erence)?|works?\s*orders?|orders?|wo|job(?:\s*ref(?:erence)?)?)\s*(?:no\.?|num(?:ber)?|#)?\s*[:=-]\s*([A-Za-z0-9_-]{2,25})$/i);
     if (lineMatch) {
       const val = lineMatch[1].trim();
-      if (!/^(no|num|number|date|for|the|details)$/i.test(val)) return val;
+      if (!/^(no|num|number|date|for|the|details|none|null)$/i.test(val) && !/^JOB-2026-/i.test(val)) {
+        return val;
+      }
     }
   }
 
-  // 3. Keyword followed by reference anywhere in text: "Ref No: 76680", "Works Order: 76680"
-  const labelMatch = text.match(/\b(?:works?\s*orders?|job|wo)?\s*(?:ref(?:erence)?|wo|job)\s*(?:no\.?|num(?:ber)?|#)?[\s:=#-]+([A-Za-z0-9_-]{2,25})\b/i);
+  // 2. Keyword followed by reference anywhere in text: "Ref No: 76680", "Works Order: 76680", "Order No: 76680"
+  const labelMatch = cleanText.match(/\b(?:works?\s*orders?|orders?|job|wo)?\s*(?:ref(?:erence)?|wo|job)\s*(?:no\.?|num(?:ber)?|#)?[\s:=#-]+([A-Za-z0-9_-]{2,25})\b/i);
   if (labelMatch) {
     const val = labelMatch[1].trim();
-    if (!/^(no|num|number|for|is|to|the|of|in|at|and|a|an|date|details)$/i.test(val)) return val;
+    if (!/^(no|num|number|for|is|to|the|of|in|at|and|a|an|date|details|none|null)$/i.test(val) && !/^JOB-2026-/i.test(val)) {
+      return val;
+    }
   }
 
+  // 3. Direct code pattern with hyphen/separator (e.g. WO-78123, REF-912, MC-9912) excluding our auto JOB-2026
+  const directMatch = cleanText.match(/\b((?:WO|REF)[-_]\d{3,10})\b/i);
+  if (directMatch) return directMatch[1].trim().toUpperCase();
+
   // 4. Fallback direct match without separator (e.g. WO12345, REF12345)
-  const fallbackDirect = text.match(/\b((?:WO|REF|JOB)\d{3,10})\b/i);
+  const fallbackDirect = cleanText.match(/\b((?:WO|REF)\d{3,10})\b/i);
   if (fallbackDirect) return fallbackDirect[1].trim().toUpperCase();
 
   return '';

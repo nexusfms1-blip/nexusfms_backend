@@ -30,6 +30,7 @@ const createWorkOrderEntity = async (data, user = null, dbConnection = null) => 
     priority,
     assigned_staff_ids, assignedStaffIds,
     external_reference_id, reference_id,
+    work_order_reference, workOrderReference, reference,
     original_sender_email,
     actual_manager_email, manager_email,
   } = data;
@@ -143,6 +144,7 @@ const createWorkOrderEntity = async (data, user = null, dbConnection = null) => 
   const randomNumber = Math.floor(1000 + Math.random() * 9000);
   const jobNumber = data.job_number || data.jobNumber || `JOB-2026-${randomNumber}`;
   const secureToken = `tok_${crypto.randomBytes(32).toString('hex')}`;
+  const woRef = (work_order_reference || workOrderReference || reference || '').trim() || null;
 
   const [result] = await db.query(
     `INSERT INTO work_orders (
@@ -151,15 +153,15 @@ const createWorkOrderEntity = async (data, user = null, dbConnection = null) => 
       assigned_staff_id, assigned_staff_ids, priority, latitude, longitude,
       manager_name, quote_amount, scheduled_date,
       scheduled_time_slot, secure_token, created_by, manager_email,
-      external_reference_id, original_sender_email
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      external_reference_id, original_sender_email, work_order_reference
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       jobNumber, jobTitle, resId, resName, resPhone, resEmail,
       resAddress, jobDesc, hours, stage,
       rawStaffId, staffIdsJson, jobPriority, mockLat, mockLng,
       mgrName, quoteVal, schedDate,
       schedSlot, secureToken, creatorUserId, actualMgrEmail,
-      extRefId, origSenderEmail
+      extRefId, origSenderEmail, woRef
     ]
   );
 

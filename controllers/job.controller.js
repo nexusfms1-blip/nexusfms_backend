@@ -6,7 +6,7 @@ const BookingRequestService = require('../services/bookingRequest.service');
 const { uploadMediaFile } = require('../services/cloudinary.service');
 const { dispatchN8NWebhook, getAdminAndOfficeRecipientEmail } = require('../services/webhook.service');
 const { createWorkOrderEntity } = require('../services/workOrder.service');
-const { buildWorkReference } = require('../utils/workReference');
+const { buildWorkReference, extractReferenceFromText } = require('../utils/workReference');
 
 
 // Helper to format any date input to strict YYYY-MM-DD
@@ -26,12 +26,38 @@ const formatDateToISO = (d) => {
 
 // Helper to format job title matching client specifications:
 // JOB REFERENCE/DOMAIN OF WHO SENT IT-FIRST HALF OF POSTCODE - MAX 4 WORDS OF WHAT JOB ENTITLES
-const formatJobTitle = (rawTitle, jobNumber, managerName, address, description, senderEmail) => {
+const formatJobTitle = (rawTitle, jobNumber, managerName, address, description, senderEmail, workOrderReference) => {
   if (!rawTitle) rawTitle = '';
   let str = String(rawTitle).trim();
 
+  // Try to find the external reference number (e.g. from DB work_order_reference, or description/title)
+  let extRef = (workOrderReference || '').toString().trim();
+  if (/^(no|num|number|null|undefined|none)$/i.test(extRef)) {
+    extRef = '';
+  }
+
+  if (!extRef && description) {
+    extRef = extractReferenceFromText(description);
+  }
+  if (!extRef && str) {
+    extRef = extractReferenceFromText(str);
+  }
+
   // If already in client format: REF/domain-POSTCODE - Words
-  if (/^[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+-[A-Za-z0-9]+\s*-\s*.+$/i.test(str)) {
+  const clientFormatMatch = str.match(/^([A-Za-z0-9_-]+)\/([A-Za-z0-9_.-]+-[A-Za-z0-9]+)\s*-\s*(.+)$/i);
+  if (clientFormatMatch) {
+    const existingRef = clientFormatMatch[1];
+    const existingMiddle = clientFormatMatch[2];
+    const existingWords = clientFormatMatch[3];
+
+    // If existing ref is not an internal auto-number (JOB-2026-...), keep it!
+    if (!existingRef.startsWith('JOB-2026-') && !existingRef.startsWith('WO-') && existingRef !== 'WO') {
+      return str;
+    }
+    // If it was an internal auto-number, but we now found a real external reference, upgrade it!
+    if (extRef) {
+      return `${extRef}/${existingMiddle} - ${existingWords}`;
+    }
     return str;
   }
 
@@ -42,12 +68,13 @@ const formatJobTitle = (rawTitle, jobNumber, managerName, address, description, 
   }
 
   return buildWorkReference({
-    reference: jobNumber,
+    reference: extRef || '', // External reference takes priority!
     senderEmail: senderEmail,
     address: address,
     issue: issueStr || description,
     managerName: managerName,
-    defaultJobNumber: jobNumber || 'WO',
+    defaultJobNumber: jobNumber || 'WO', // Auto-number is only the fallback
+    description: description,
   });
 };
 
@@ -60,6 +87,7 @@ const formatJobRow = (r, role) => {
   const job = {
     id: r.id,
     jobNumber: r.job_number,
+    workOrderReference: r.work_order_reference || null,
     section: r.pipeline_stage, // Maps to 5 Kanban stages
     title: formatJobTitle(
       r.title,
@@ -67,7 +95,8 @@ const formatJobRow = (r, role) => {
       r.manager_name,
       r.live_property_address || r.property_address,
       r.description,
-      r.original_sender_email || r.manager_email
+      r.original_sender_email || r.manager_email,
+      r.work_order_reference
     ),
     tenantId: r.resident_id || null,
     tenantName: r.live_resident_name || r.resident_name,
@@ -1826,5 +1855,6 @@ module.exports = {
   getAssignmentHistory,
   resendQuoteRequest,
   sendQuoteToManager,
+  formatJobTitle,
 };
 
