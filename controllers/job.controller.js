@@ -67,15 +67,21 @@ const formatJobTitle = (rawTitle, jobNumber, managerName, address, description, 
     issueStr = issueStr.split(' - ').slice(1).join(' - ').trim();
   }
 
-  return buildWorkReference({
-    reference: extRef || '', // External reference takes priority!
-    senderEmail: senderEmail,
-    address: address,
-    issue: issueStr || description,
-    managerName: managerName,
-    defaultJobNumber: jobNumber || 'WO', // Auto-number is only the fallback
-    description: description,
-  });
+  // If an external reference exists, format as client reference: REF/domain-POSTCODE - Words
+  if (extRef && !extRef.startsWith('JOB-2026-')) {
+    return buildWorkReference({
+      reference: extRef,
+      senderEmail: senderEmail,
+      address: address,
+      issue: issueStr || description,
+      managerName: managerName,
+      defaultJobNumber: jobNumber || 'WO',
+      description: description,
+    });
+  }
+
+  // Otherwise, keep the original clean title (e.g. 'Air Conditioning Service')
+  return str || description || jobNumber || 'Work Order';
 };
 
 // Helper to format raw database row to Frontend job object
@@ -214,7 +220,7 @@ const getJobs = async (req, res, next) => {
     // Role-based data isolation
     if (req.user && req.user.role === 'MAINTENANCE_STAFF') {
       if (req.user.staffProfileId) {
-        sql += ' AND (w.assigned_staff_id = ? OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(? AS JSON), "$")))';
+        sql += ' AND (w.assigned_staff_id = ? OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(? AS CHAR), "$")))';
         queryParams.push(req.user.staffProfileId, req.user.staffProfileId);
       } else {
         // If they have no profile yet, they shouldn't see any jobs
@@ -222,7 +228,7 @@ const getJobs = async (req, res, next) => {
       }
     } else if (staffId && staffId.trim() !== '' && staffId !== 'ALL') {
       const cleanStaffId = parseInt(staffId.replace(/^(stf-|usr-)/, ''), 10);
-      sql += ' AND (w.assigned_staff_id = ? OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(? AS JSON), "$")))';
+      sql += ' AND (w.assigned_staff_id = ? OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(? AS CHAR), "$")))';
       queryParams.push(cleanStaffId, cleanStaffId);
     }
 

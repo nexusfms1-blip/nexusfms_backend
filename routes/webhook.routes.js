@@ -25,4 +25,7 @@ const requireWebhookApiKey = (req, res, next) => {
 // Route for external email-to-quote automation
 router.post('/quotes', requireWebhookApiKey, webhookController.handleIncomingEmailQuote);
 
+// Route for property manager quote approval/rejection reply email automation
+router.post('/manager-reply', requireWebhookApiKey, webhookController.handleManagerApprovalReply);
+
 module.exports = router;

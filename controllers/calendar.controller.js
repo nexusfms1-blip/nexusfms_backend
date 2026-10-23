@@ -114,11 +114,11 @@ const getCalendar = async (req, res, next) => {
 
     // Filter by Staff ID
     if (req.user.role === 'MAINTENANCE_STAFF') {
-      sql += ' AND (w.assigned_staff_id = ? OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(? AS JSON), "$")))';
+      sql += ' AND (w.assigned_staff_id = ? OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(? AS CHAR), "$")))';
       queryParams.push(staffProfileId, staffProfileId);
     } else if (staffId && staffId !== 'ALL') {
       const cleanId = parseInt(String(staffId).replace(/^(stf-|usr-)/, ''), 10);
-      sql += ' AND (w.assigned_staff_id = ? OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(? AS JSON), "$")))';
+      sql += ' AND (w.assigned_staff_id = ? OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(? AS CHAR), "$")))';
       queryParams.push(cleanId, cleanId);
     }
 
@@ -216,7 +216,7 @@ const getPublicBookingAvailableSlots = async (req, res, next) => {
 
     // 1. Resolve Work Order & Assigned / Preferred Technician from Token
     const [bookingRows] = await pool.query(
-      `SELECT b.id as request_id, b.work_order_id, b.assignment_preference_staff_id, w.assigned_staff_id, w.duration_hours, w.title, w.description, w.resident_name, w.property_address
+      `SELECT b.id as request_id, b.work_order_id, b.earliest_date, b.assignment_preference_staff_id, w.assigned_staff_id, w.duration_hours, w.title, w.description, w.resident_name, w.property_address
        FROM booking_requests b
        JOIN work_orders w ON b.work_order_id = w.id
        WHERE b.secure_token = ?`,
@@ -227,12 +227,14 @@ const getPublicBookingAvailableSlots = async (req, res, next) => {
     let staffProfileId = null;
     let durationHours = 1.5;
     let jobDetails = {};
+    let earliestDateVal = null;
 
     if (bookingRows.length > 0) {
       const b = bookingRows[0];
       workOrderId = b.work_order_id;
       staffProfileId = b.assigned_staff_id || b.assignment_preference_staff_id;
       durationHours = parseFloat(b.duration_hours || 1.5);
+      earliestDateVal = b.earliest_date;
       jobDetails = {
         title: b.title,
         description: b.description,
@@ -262,6 +264,32 @@ const getPublicBookingAvailableSlots = async (req, res, next) => {
       return res.status(404).json({
         success: false,
         message: 'Invalid or expired secure booking token.',
+      });
+    }
+
+    // Diary opening boundary check (Auto-rollover protection)
+    const todayStr = new Date().toISOString().split('T')[0];
+    const diaryMinDate = process.env.BOOKING_DIARY_MIN_DATE || '2026-10-28';
+    let candidateEarliest = diaryMinDate;
+    if (earliestDateVal) {
+      const rowEarliest = typeof earliestDateVal === 'string' ? earliestDateVal.split('T')[0] : new Date(earliestDateVal).toISOString().split('T')[0];
+      if (rowEarliest > candidateEarliest) {
+        candidateEarliest = rowEarliest;
+      }
+    }
+    const activeEarliestDate = (candidateEarliest && candidateEarliest > todayStr) ? candidateEarliest : todayStr;
+
+    if (date < activeEarliestDate) {
+      return res.status(200).json({
+        success: true,
+        workOrderId,
+        durationHours,
+        availability: {
+          success: false,
+          reason: `The booking diary opens from Wednesday, ${activeEarliestDate}. Please select an appointment date on or after this date.`,
+          message: `The booking diary opens from Wednesday, ${activeEarliestDate}. Please select an appointment date on or after this date.`,
+          availableSlots: []
+        }
       });
     }
 

@@ -44,7 +44,7 @@ const getStaff = async (req, res, next) => {
         COUNT(DISTINCT CASE WHEN w.pipeline_stage = 'Completed Jobs' THEN w.id END) as live_completed_jobs
       FROM users u
       LEFT JOIN staff_profiles sp ON u.id = sp.user_id
-      LEFT JOIN work_orders w ON (w.assigned_staff_id = sp.id OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(sp.id AS JSON), '$')))
+      LEFT JOIN work_orders w ON (w.assigned_staff_id = sp.id OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(sp.id AS CHAR), '$')))
       WHERE u.role = 'MAINTENANCE_STAFF'
     `;
 
@@ -56,7 +56,7 @@ const getStaff = async (req, res, next) => {
       queryParams.push(term, term, term, term);
     }
 
-    sql += ' GROUP BY u.id, sp.id ORDER BY (live_completed_jobs * 100 + COALESCE(sp.kpi_score, 0)) DESC, sp.kpi_score DESC, u.created_at DESC';
+    sql += ' GROUP BY u.id, sp.id ORDER BY live_completed_jobs DESC, sp.kpi_score DESC, u.created_at DESC';
 
     const [rows] = await pool.query(sql, queryParams);
 

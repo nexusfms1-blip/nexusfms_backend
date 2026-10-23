@@ -96,7 +96,7 @@ const getMyAssignedJobs = async (req, res, next) => {
 
     // Office Admin views all, Staff views ONLY assigned jobs
     if (req.user.role === 'MAINTENANCE_STAFF') {
-      sql += ' WHERE (w.assigned_staff_id = ? OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(? AS JSON), "$")))';
+      sql += ' WHERE (w.assigned_staff_id = ? OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(? AS CHAR), "$")))';
       queryParams.push(staffProfileId, staffProfileId);
     }
 
@@ -493,7 +493,7 @@ const markJobComplete = async (req, res, next) => {
             WHERE w.pipeline_stage = 'Completed Jobs'
               AND w.id != ?
               AND w.resident_id = ?
-              AND (w.assigned_staff_id = ? OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(? AS JSON), '$')))
+              AND (w.assigned_staff_id = ? OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(? AS CHAR), '$')))
           `;
           revisitParams = [id, residentId, sId, sId];
         } else if (propertyAddress) {
@@ -502,7 +502,7 @@ const markJobComplete = async (req, res, next) => {
             WHERE w.pipeline_stage = 'Completed Jobs'
               AND w.id != ?
               AND w.property_address = ?
-              AND (w.assigned_staff_id = ? OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(? AS JSON), '$')))
+              AND (w.assigned_staff_id = ? OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(? AS CHAR), '$')))
           `;
           revisitParams = [id, propertyAddress, sId, sId];
         }

@@ -1,8 +1,8 @@
 const { pool } = require('../config/db');
 const NotificationService = require('../services/notification.service');
 
-const MAX_REMINDERS = parseInt(process.env.QUOTE_PHOTO_MAX_REMINDERS || '3', 10);
-const REMINDER_INTERVAL_HOURS = 72; // 3 days
+const MAX_REMINDERS = parseInt(process.env.QUOTE_PHOTO_MAX_REMINDERS || '14', 10);
+const REMINDER_INTERVAL_HOURS = parseInt(process.env.PHOTO_REMINDER_INTERVAL_HOURS || '24', 10); // 24 hours (1 day daily reminder)
 
 const runPhotoReminderJob = async () => {
   console.log(`[PhotoReminderJob] Starting check for pending quote photo requests...`);

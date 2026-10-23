@@ -496,6 +496,145 @@ const handleIncomingEmailQuote = async (req, res) => {
   }
 };
 
+/**
+ * Handle incoming Property Manager approval or rejection reply email
+ * Route: POST /api/v1/webhooks/manager-reply
+ */
+const handleManagerApprovalReply = async (req, res) => {
+  try {
+    const { subject, body, bodySnippet, fromEmail, fromName, jobNumber, reference } = req.body;
+    const textContent = `${subject || ''}\n${bodySnippet || ''}\n${body || ''}`;
+
+    // 1. Extract Job Number (e.g. #JOB-2026-7014 or JOB-2026-7014)
+    let targetJobNumber = jobNumber;
+    if (!targetJobNumber && textContent) {
+      const match = textContent.match(/#(JOB-\d{4}-\d{3,6})/i) || textContent.match(/\b(JOB-\d{4}-\d{3,6})\b/i);
+      if (match) targetJobNumber = match[1].toUpperCase();
+    }
+
+    // 2. Extract Work Reference (e.g. 88421, Ref No: 88421, WO-12345)
+    let targetRef = reference;
+    if (!targetRef && textContent) {
+      targetRef = extractReferenceFromText(textContent);
+    }
+
+    if (!targetJobNumber && !targetRef) {
+      console.warn('[Webhook Manager Reply] Could not extract Job Number or Reference from email:', subject);
+      return res.status(400).json({
+        success: false,
+        message: 'Could not extract Job Number or Reference ID from email.',
+      });
+    }
+
+    // 3. Locate target work order in database
+    let sql = 'SELECT id, job_number, title, pipeline_stage, manager_approval_status, resident_name, contact_phone, contact_email FROM work_orders WHERE ';
+    const params = [];
+    if (targetJobNumber) {
+      sql += 'job_number = ?';
+      params.push(targetJobNumber);
+    } else {
+      sql += '(work_order_reference = ? OR external_reference_id = ? OR title LIKE ?)';
+      params.push(targetRef, targetRef, `%${targetRef}%`);
+    }
+
+    const [rows] = await pool.query(sql, params);
+    if (rows.length === 0) {
+      console.warn(`[Webhook Manager Reply] No matching work order found for Job: ${targetJobNumber || targetRef}`);
+      return res.status(404).json({
+        success: false,
+        message: `No work order found matching Job Number/Reference: ${targetJobNumber || targetRef}`,
+      });
+    }
+
+    const job = rows[0];
+
+    // 4. Smart Intent Classification (Approval vs Rejection vs Ambiguous)
+    const approvalPatterns = [
+      /\b(approved|approve|proceed|go\s*ahead|accepted|accept|confirmed)\b/i,
+      /quote\s*(is\s*)?approved/i,
+      /proceed\s*with/i,
+      /ok\s*to\s*proceed/i,
+      /please\s*proceed/i,
+    ];
+
+    const rejectionPatterns = [
+      /\b(reject|rejected|declined|decline|cancel|cancelled|do\s*not\s*proceed|too\s*expensive|unapproved)\b/i,
+      /quote\s*(is\s*)?rejected/i,
+      /not\s*proceeding/i,
+    ];
+
+    const isApproval = approvalPatterns.some(p => p.test(textContent));
+    const isRejection = rejectionPatterns.some(p => p.test(textContent));
+
+    if (isRejection && !isApproval) {
+      // Manager Rejected Quote
+      const cleanSnippet = (bodySnippet || body || 'Rejected by Property Manager via email.').trim().substring(0, 255);
+      await pool.query(
+        `UPDATE work_orders SET 
+          manager_approval_status = 'REJECTED',
+          manager_approval_notes = ?
+         WHERE id = ?`,
+        [cleanSnippet, job.id]
+      );
+
+      console.log(`[Webhook Manager Reply] ❌ Work order #${job.job_number} marked as REJECTED by Property Manager.`);
+      return res.status(200).json({
+        success: true,
+        action: 'REJECTED',
+        workOrderId: job.id,
+        jobNumber: job.job_number,
+        message: `Work Order #${job.job_number} marked as REJECTED by Property Manager.`,
+      });
+    }
+
+    if (isApproval) {
+      // Manager Approved Quote!
+      const cleanSnippet = (bodySnippet || body || 'Approved, please proceed.').trim().substring(0, 255);
+      await pool.query(
+        `UPDATE work_orders SET 
+          manager_approval_status = 'APPROVED',
+          manager_approval_notes = ?,
+          pipeline_stage = 'Jobs Waiting Booking'
+         WHERE id = ?`,
+        [cleanSnippet, job.id]
+      );
+
+      // Trigger automatic booking request SMS & email to tenant
+      const BookingRequestService = require('../services/bookingRequest.service');
+      await BookingRequestService.triggerAutoBookingRequest(job.id).catch(err => {
+        console.error('[Webhook Manager Reply] Error triggering booking request:', err.message);
+      });
+
+      console.log(`[Webhook Manager Reply] ✓ Work order #${job.job_number} AUTO-APPROVED by Property Manager. Moved to Jobs Waiting Booking.`);
+      return res.status(200).json({
+        success: true,
+        action: 'APPROVED',
+        workOrderId: job.id,
+        jobNumber: job.job_number,
+        message: `Work Order #${job.job_number} automatically APPROVED and moved to Jobs Waiting Booking.`,
+      });
+    }
+
+    // Ambiguous intent (e.g. asking a question / discount) -> Keep pending for human review
+    console.log(`[Webhook Manager Reply] Ambiguous email received for #${job.job_number}. Leaving for manual office review.`);
+    return res.status(200).json({
+      success: true,
+      action: 'PENDING_HUMAN_REVIEW',
+      workOrderId: job.id,
+      jobNumber: job.job_number,
+      message: 'Email intent was ambiguous. Left pending for manual review.',
+    });
+
+  } catch (error) {
+    console.error('[Webhook Manager Reply Fatal Error]', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Internal server error processing manager approval.',
+    });
+  }
+};
+
 module.exports = {
   handleIncomingEmailQuote,
+  handleManagerApprovalReply,
 };

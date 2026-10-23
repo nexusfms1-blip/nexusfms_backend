@@ -74,6 +74,20 @@ const getPublicRequestByToken = async (req, res, next) => {
       const finalSlot = b.booked_time_slot || b.scheduled_time_slot || null;
       const finalStaff = b.staff_name || 'Assigned Technician';
 
+      // Smart earliest booking date calculation with automatic forward-rollover
+      const todayStr = new Date().toISOString().split('T')[0];
+      const diaryMinDate = process.env.BOOKING_DIARY_MIN_DATE || '2026-10-28';
+      let candidateEarliest = diaryMinDate;
+      if (b.earliest_date) {
+        const rowEarliest = typeof b.earliest_date === 'string' ? b.earliest_date.split('T')[0] : new Date(b.earliest_date).toISOString().split('T')[0];
+        if (rowEarliest > candidateEarliest) {
+          candidateEarliest = rowEarliest;
+        }
+      }
+
+      // Auto-rollover: if candidate date is in the future, open from that date; once passed, fall back to today
+      const activeEarliestDate = (candidateEarliest && candidateEarliest > todayStr) ? candidateEarliest : todayStr;
+
       return res.status(200).json({
         success: true,
         type: 'BOOKING',
@@ -90,6 +104,7 @@ const getPublicRequestByToken = async (req, res, next) => {
           selectedDate: finalDate,
           selectedTimeSlot: finalSlot,
           status: b.status,
+          earliestDate: activeEarliestDate,
           bookingDetails: {
             date: finalDate,
             timeSlot: finalSlot,

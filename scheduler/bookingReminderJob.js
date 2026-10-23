@@ -1,8 +1,8 @@
 const { pool } = require('../config/db');
 const NotificationService = require('../services/notification.service');
 
-const MAX_REMINDERS = parseInt(process.env.BOOKING_MAX_REMINDERS || '3', 10);
-const REMINDER_INTERVAL_HOURS = 72; // 3 days
+const MAX_REMINDERS = parseInt(process.env.BOOKING_MAX_REMINDERS || '14', 10);
+const REMINDER_INTERVAL_HOURS = parseInt(process.env.BOOKING_REMINDER_INTERVAL_HOURS || '24', 10); // 24 hours (1 day daily reminder)
 
 const runBookingReminderJob = async () => {
   console.log(`[BookingReminderJob] Starting check for pending booking requests...`);
