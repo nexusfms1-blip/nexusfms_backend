@@ -76,7 +76,7 @@ const getPublicRequestByToken = async (req, res, next) => {
 
       // Smart earliest booking date calculation with automatic forward-rollover
       const todayStr = new Date().toISOString().split('T')[0];
-      const diaryMinDate = process.env.BOOKING_DIARY_MIN_DATE || '2026-10-28';
+      const diaryMinDate = process.env.BOOKING_DIARY_MIN_DATE || '2026-10-27';
       let candidateEarliest = diaryMinDate;
       if (b.earliest_date) {
         const rowEarliest = typeof b.earliest_date === 'string' ? b.earliest_date.split('T')[0] : new Date(b.earliest_date).toISOString().split('T')[0];
@@ -340,30 +340,8 @@ const submitPublicQuoteUpload = async (req, res, next) => {
         console.warn('[N8N_WEBHOOK] Failed to dispatch QUOTE_PHOTOS_UPLOADED admin alert:', err.message);
       });
 
-    // --- NEW CODE: Step 2 (Photos Uploaded email to Manager) ---
-    const managerEmail = wo.manager_email || wo.original_sender_email;
-    if (managerEmail) {
-      dispatchN8NWebhook('ADMIN_OFFICE_ALERT', {
-        alertType: 'QUOTE_PHOTOS_UPLOADED_MANAGER',
-        recipientEmail: managerEmail,
-        to: managerEmail,
-        email: managerEmail,
-        workOrderId,
-        jobNumber: wo.job_number,
-        jobTitle,
-        propertyAddress: resAddress,
-        residentName: resName,
-        managerName: wo.manager_name,
-        managerEmail,
-        photoCount: savedMediaList.length,
-        photoUrls: savedMediaList.map(m => m.filePath).filter(Boolean),
-        subject: `[Nexus FMS] Tenant Photos Uploaded - Job #${wo.job_number || workOrderId}`,
-        headline: 'Tenant Has Uploaded Photos',
-        message: `Dear ${wo.manager_name || 'Property Manager'},\n\nThe tenant (${resName}) has uploaded ${savedMediaList.length} photo(s) for the maintenance request.\n\nWork Order: #${wo.job_number || 'N/A'} - ${jobTitle}\nProperty: ${resAddress}\n\nWe are reviewing them and will send you a quote shortly.\n\nBest regards,\nNexus FMS Team`,
-        actionUrl: `${frontendBaseUrl}/admin/pipeline?stage=READY_TO_QUOTE`,
-      }).catch(err => console.warn('[submitPublicQuoteUpload] Manager Email Error:', err.message));
-    }
-    // --- END NEW CODE ---
+    // Note: Client specifically requested that Property Managers should NOT receive emails when tenants upload photos.
+    // Managers should ONLY receive emails when tenants confirm appointment bookings.
 
     res.status(200).json({
       success: true,
