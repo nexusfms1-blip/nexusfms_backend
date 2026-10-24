@@ -646,8 +646,8 @@ const submitPublicBooking = async (req, res, next) => {
         bookingLink: tenantBookingDetailsUrl,
         relatedEntityType: 'work_orders',
         relatedEntityId: workOrderId,
-        channels: ['EMAIL', 'SMS'],
-        contactEmail: resEmail,
+        channels: ['SMS'],
+        contactEmail: null,
         contactPhone: resPhone,
         propertyAddress: resAddress
       }).catch(err => console.error('[Tenant Booking Confirmation Notification Error]', err));

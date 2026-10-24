@@ -112,6 +112,18 @@ const notificationService = {
     connection = null
   }) {
     const db = connection || pool;
+
+    // STRICT CLIENT & TENANT POLICY:
+    // Tenants NEVER receive emails. All tenant communications are strictly SMS-based.
+    // Strip 'EMAIL' from channels and force contactEmail to null whenever recipientRole === 'TENANT'.
+    if (recipientRole === 'TENANT') {
+      channels = channels.filter(c => c !== 'EMAIL');
+      if (!channels.includes('SMS')) {
+        channels.push('SMS');
+      }
+      contactEmail = null;
+    }
+
     const sanitizedData = sanitizePayload(recipientRole, structuredData);
     const finalMessage = formatMessage(messageTemplate, sanitizedData);
     let notificationId = null;

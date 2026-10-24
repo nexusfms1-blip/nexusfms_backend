@@ -154,14 +154,8 @@ const createTenant = async (req, res, next) => {
         });
       }
 
-      // Dispatch Email directly via email provider if email is provided
-      if (residentEmail) {
-        sendEmail({ to: residentEmail, subject: emailSubject, body: emailBody }).catch(err => {
-          console.warn('[TenantRegistration] Email delivery warning:', err.message);
-        });
-      }
-
-      // Dispatch N8N Webhook for TENANT_REGISTRATION event
+      // STRICT CLIENT POLICY: Tenants never receive emails, only SMS.
+      // Dispatch N8N Webhook for TENANT_REGISTRATION event with SMS recipient
       dispatchN8NWebhook('TENANT_REGISTRATION', {
         event: 'TENANT_REGISTRATION',
         type: 'TENANT_REGISTRATION',
@@ -173,12 +167,12 @@ const createTenant = async (req, res, next) => {
         residentPhone: residentPhone,
         contactPhone: residentPhone,
         to: residentPhone,
-        email: residentEmail,
-        residentEmail: residentEmail,
-        contactEmail: residentEmail,
+        email: null,
+        residentEmail: null,
+        contactEmail: null,
         address: residentAddress,
         propertyAddress: residentAddress,
-        subject: emailSubject,
+        subject: 'Welcome to Nexus FMS',
         message: residentSmsText,
         emailBody: emailBody,
         actionUrl: frontendBase,

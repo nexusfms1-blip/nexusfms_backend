@@ -1558,8 +1558,8 @@ const cancelJob = async (req, res, next) => {
          title: 'Appointment Update — New Appointment Required',
          messageTemplate: `Hi {{resident_name}},\n\nWe sincerely apologize, but your upcoming maintenance appointment has been cancelled. Please select a new appointment time using the booking link we will send you shortly.`,
          structuredData: { resident_name: job.resident_name },
-         channels: ['EMAIL', 'SMS'],
-         contactEmail: residentEmail,
+         channels: ['SMS'],
+         contactEmail: null,
          contactPhone: residentPhone,
          connection
        });
