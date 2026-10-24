@@ -269,7 +269,7 @@ const getPublicBookingAvailableSlots = async (req, res, next) => {
 
     // Diary opening boundary check (Auto-rollover protection)
     const todayStr = new Date().toISOString().split('T')[0];
-    const diaryMinDate = process.env.BOOKING_DIARY_MIN_DATE || '2026-10-28';
+    const diaryMinDate = process.env.BOOKING_DIARY_MIN_DATE || '2026-10-27';
     let candidateEarliest = diaryMinDate;
     if (earliestDateVal) {
       const rowEarliest = typeof earliestDateVal === 'string' ? earliestDateVal.split('T')[0] : new Date(earliestDateVal).toISOString().split('T')[0];

@@ -1,5 +1,6 @@
 const { pool } = require('../config/db');
 const NotificationService = require('../services/notification.service');
+const QuoteRequestService = require('../services/quoteRequest.service');
 
 const MAX_REMINDERS = parseInt(process.env.QUOTE_PHOTO_MAX_REMINDERS || '14', 10);
 const REMINDER_INTERVAL_HOURS = parseInt(process.env.PHOTO_REMINDER_INTERVAL_HOURS || '24', 10); // 24 hours (1 day daily reminder)
@@ -7,9 +8,33 @@ const REMINDER_INTERVAL_HOURS = parseInt(process.env.PHOTO_REMINDER_INTERVAL_HOU
 const runPhotoReminderJob = async () => {
   console.log(`[PhotoReminderJob] Starting check for pending quote photo requests...`);
   try {
+    // ── Self-Healing Reconciliation Step ──────────────────────────────────────────
+    // Automatically detect any work order in 'Quotes' stage (e.g. from CSV import
+    // or manual creation) that is missing a quote_request entry, and generate it.
+    const [unlinkedQuotes] = await pool.query(
+      `SELECT w.id, w.job_number, w.title
+       FROM work_orders w
+       LEFT JOIN quote_requests qr ON w.id = qr.work_order_id
+       WHERE w.pipeline_stage = 'Quotes'
+         AND qr.id IS NULL`
+    );
+
+    if (unlinkedQuotes.length > 0) {
+      console.log(`[PhotoReminderJob] 🔄 Detected ${unlinkedQuotes.length} quotes without active photo requests. Reconciling...`);
+      for (const q of unlinkedQuotes) {
+        try {
+          await QuoteRequestService.triggerAutoPhotoRequest(q.id);
+          console.log(`[PhotoReminderJob] ✓ Reconciled photo request & dispatched link for Quote #${q.job_number || q.id}`);
+        } catch (qErr) {
+          console.error(`[PhotoReminderJob] ❌ Failed to auto-generate photo request for Quote #${q.id}:`, qErr.message);
+        }
+      }
+    }
+
     const [pendingRequests] = await pool.query(
       `SELECT qr.id, qr.work_order_id, qr.status, qr.last_photo_reminder_at, qr.photo_reminder_count, qr.created_at, qr.secure_token,
-              w.title, r.id as resident_id, r.full_name as resident_name, r.email as resident_email, r.phone as resident_phone
+              w.title, w.resident_name as fallback_resident_name, w.contact_phone as fallback_resident_phone,
+              r.id as resident_id, r.full_name as resident_name, r.email as resident_email, r.phone as resident_phone
        FROM quote_requests qr
        JOIN work_orders w ON qr.work_order_id = w.id
        LEFT JOIN residents r ON w.resident_id = r.id
@@ -28,7 +53,7 @@ const runPhotoReminderJob = async () => {
       const hoursSinceCreation = (now - createdAt) / (1000 * 60 * 60);
       const hoursSinceLastReminder = lastReminderAt ? (now - lastReminderAt) / (1000 * 60 * 60) : null;
 
-      // Rule: At least 72h since creation AND (no reminder sent OR at least 72h since last reminder)
+      // Rule: At least 24h since creation AND (no reminder sent OR at least 24h since last reminder)
       if (hoursSinceCreation >= REMINDER_INTERVAL_HOURS) {
         if (!lastReminderAt || hoursSinceLastReminder >= REMINDER_INTERVAL_HOURS) {
           
@@ -72,15 +97,18 @@ const runPhotoReminderJob = async () => {
 
             const dispatcher = require('../services/notification.service');
             
-            if (req.resident_id) {
+            const resName = req.resident_name || req.fallback_resident_name || 'Resident';
+            const resPhone = req.resident_phone || req.fallback_resident_phone || null;
+
+            if (resPhone || req.resident_id) {
                await dispatcher.dispatch({
-                 recipientUserId: req.resident_id, // assuming resident acts as user in this context
+                 recipientUserId: req.resident_id || null,
                  recipientRole: 'TENANT',
                  type: 'QUOTE_PHOTO_REMINDER',
                  title: 'Reminder: Photos Required for Your Quote',
                  messageTemplate: `Hi {{resident_name}},\n\nThis is a reminder that we are still waiting for the requested photos/details to prepare the quote for your maintenance request ({{title}}).\n\nPlease use the secure link below to upload the requested photos/details:\n{{uploadLink}}\n\nThank you.`,
                  structuredData: {
-                    resident_name: req.resident_name || 'Resident',
+                    resident_name: resName,
                     title: req.title,
                     uploadLink
                  },
@@ -88,8 +116,8 @@ const runPhotoReminderJob = async () => {
                  relatedEntityType: 'work_orders',
                  relatedEntityId: req.work_order_id,
                  channels: ['SMS'],
-                 contactEmail: null, // Bhejna hi nahi hai email, only SMS
-                 contactPhone: req.resident_phone,
+                 contactEmail: null,
+                 contactPhone: resPhone,
                  connection // Pass transaction
                });
             }

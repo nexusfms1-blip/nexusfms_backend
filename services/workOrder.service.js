@@ -4,6 +4,25 @@ const notificationService = require('./notification.service');
 const QuoteRequestService = require('./quoteRequest.service');
 const BookingRequestService = require('./bookingRequest.service');
 
+const MANAGER_AGENCY_DOMAINS = [
+  'jlgroup.uk',
+  'martinco.com',
+  'sequencehome.co.uk',
+  'robertaston.com',
+  'burchelledwards.co.uk',
+  'apmaintenance.uk',
+  'nexusfms.com',
+  'allpurposegroup.co.uk'
+];
+
+const isManagerEmail = (candidateEmail, senderEmail = null, mgrEmail = null) => {
+  if (!candidateEmail || typeof candidateEmail !== 'string') return false;
+  const lower = candidateEmail.toLowerCase().trim();
+  if (senderEmail && lower === senderEmail.toLowerCase().trim()) return true;
+  if (mgrEmail && lower === mgrEmail.toLowerCase().trim()) return true;
+  return MANAGER_AGENCY_DOMAINS.some(d => lower.endsWith('@' + d) || lower.includes('@' + d));
+};
+
 /**
  * Shared service to create a Work Order / Quote entity.
  * Used by both manual admin API (job.controller.js) and inbound email webhook (webhook.controller.js)
@@ -41,8 +60,26 @@ const createWorkOrderEntity = async (data, user = null, dbConnection = null) => 
   let resAddress = (property_address || address || '').trim();
   let resEmail = (contact_email || email || contactEmail || '').trim() || null;
 
-  const origSenderEmailForFix = (original_sender_email || '').trim() || null;
-  if (resEmail && origSenderEmailForFix && resEmail.toLowerCase() === origSenderEmailForFix.toLowerCase()) {
+  const jobDesc = (description || '').trim() || null;
+  const origSenderEmail = (original_sender_email || '').trim() || null;
+  const initialMgrEmail = (actual_manager_email || manager_email || '').trim() || null;
+
+  // Check if description body contains an email matching the sender email or agency manager domain
+  let extractedBodyManagerEmail = null;
+  if (jobDesc) {
+    const emailMatches = jobDesc.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || [];
+    for (const em of emailMatches) {
+      if (isManagerEmail(em, origSenderEmail, initialMgrEmail)) {
+        extractedBodyManagerEmail = em.trim();
+        break;
+      }
+    }
+  }
+
+  const actualMgrEmail = initialMgrEmail || extractedBodyManagerEmail || origSenderEmail || (user ? user.email : null) || null;
+
+  // Guard: If resEmail belongs to a manager/sender/agency, it MUST NEVER be set as the tenant's email!
+  if (resEmail && isManagerEmail(resEmail, origSenderEmail, actualMgrEmail)) {
     resEmail = null;
   }
 
@@ -79,25 +116,27 @@ const createWorkOrderEntity = async (data, user = null, dbConnection = null) => 
       if (!resName) resName = resObj.full_name;
       resPhone = resObj.phone;
       resAddress = resObj.address;
-      if (resObj.email) resEmail = resObj.email;
+      if (resObj.email && !isManagerEmail(resObj.email, origSenderEmail, actualMgrEmail)) {
+        resEmail = resObj.email;
+      }
     }
   }
 
   // 2. If resident_id is NOT passed, auto-link or create resident record in residents table
   if (!resId && resName && resPhone && resAddress) {
+    const safeResEmail = isManagerEmail(resEmail, origSenderEmail, actualMgrEmail) ? null : resEmail;
     const [existingRes] = await db.query('SELECT id FROM residents WHERE phone = ? AND full_name = ?', [resPhone, resName]);
     if (existingRes.length > 0) {
       resId = existingRes[0].id;
     } else {
       const [newResResult] = await db.query(
         'INSERT INTO residents (full_name, phone, email, address) VALUES (?, ?, ?, ?)',
-        [resName, resPhone, resEmail, resAddress]
+        [resName, resPhone, safeResEmail, resAddress]
       );
       resId = newResResult.insertId;
     }
   }
 
-  const jobDesc = (description || '').trim() || null;
   const hours = parseFloat(duration_hours || durationHours || 1.5);
   const stage = pipeline_stage || section || 'Quotes';
   const mgrName = (manager_name || managerName || (user ? user.full_name : null) || 'Office Admin').trim();
@@ -108,8 +147,6 @@ const createWorkOrderEntity = async (data, user = null, dbConnection = null) => 
   const staffIdsArr = assigned_staff_ids || assignedStaffIds || [];
   const staffIdsJson = staffIdsArr.length > 0 ? JSON.stringify(staffIdsArr) : null;
   const extRefId = (external_reference_id || reference_id || '').trim() || null;
-  const origSenderEmail = (original_sender_email || '').trim() || null;
-  const actualMgrEmail = (actual_manager_email || manager_email || (user ? user.email : null) || origSenderEmail || null);
   const creatorUserId = user ? user.id : null;
 
   // Coordinates near London for default mapping

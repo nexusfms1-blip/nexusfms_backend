@@ -7,6 +7,19 @@ const { sendEmail } = require('../services/notification/providers/email.provider
 const { dispatchN8NWebhook } = require('../services/webhook.service');
 const { normalizePhoneNumber } = require('../utils/phoneNormalizer');
 
+function generateDateRange(startStr, endStr) {
+  if (!startStr || !endStr) return [];
+  const dates = [];
+  const curr = new Date(startStr);
+  const end = new Date(endStr);
+  if (isNaN(curr.getTime()) || isNaN(end.getTime())) return [];
+  while (curr <= end) {
+    dates.push(curr.toISOString().split('T')[0]);
+    curr.setDate(curr.getDate() + 1);
+  }
+  return dates;
+}
+
 // @desc    Get all staff members / technicians
 // @route   GET /api/v1/staff
 // @access  Private (JWT Required)
@@ -236,7 +249,11 @@ const createStaff = async (req, res, next) => {
   try {
     await connection.beginTransaction();
 
-    const { full_name, name, email, phone, role, role_title, color, workingDays, startTime, endTime, password } = req.body;
+    const {
+      full_name, name, email, phone, role, role_title, color,
+      workingDays, startTime, endTime, breakStartTime, breakEndTime,
+      leaveFrom, leaveTo, unavailableDates, password
+    } = req.body;
 
     const staffName = (full_name || name || '').trim();
     const rawPhone = (phone || '').trim();
@@ -297,12 +314,24 @@ const createStaff = async (req, res, next) => {
     }
     const daysJson = JSON.stringify(daysArray || ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']);
 
+    // Break & Leave configuration
+    const breakStart = breakStartTime || '12:00:00';
+    const breakEnd = breakEndTime || '13:00:00';
+
+    let unavailJson = null;
+    if (leaveFrom && leaveTo) {
+      const dateList = generateDateRange(leaveFrom, leaveTo);
+      if (dateList.length > 0) unavailJson = JSON.stringify(dateList);
+    } else if (unavailableDates) {
+      unavailJson = typeof unavailableDates === 'string' ? unavailableDates : JSON.stringify(unavailableDates);
+    }
+
     // 2. Create Staff Profile
     const [profileResult] = await connection.query(
       `INSERT INTO staff_profiles 
-        (user_id, staff_code, role_title, color_hex, working_days_json, work_start_time, work_end_time) 
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [userId, staffCode, staffRoleTitle, staffColor, daysJson, startTime || '08:00:00', endTime || '17:00:00']
+        (user_id, staff_code, role_title, color_hex, working_days_json, work_start_time, work_end_time, break_start_time, break_end_time, unavailable_dates_json) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [userId, staffCode, staffRoleTitle, staffColor, daysJson, startTime || '08:00:00', endTime || '17:00:00', breakStart, breakEnd, unavailJson]
     );
 
     const profileId = profileResult.insertId;
@@ -425,7 +454,12 @@ const updateStaff = async (req, res, next) => {
   try {
     const { id } = req.params;
     const strId = String(id);
-    const { full_name, name, phone, email, avatarUrl, avatar_url, role, role_title, color, workingDays, startTime, endTime, password, home_address, homeAddress, home_postcode, homePostcode, dutyStatus, duty_status } = req.body;
+    const {
+      full_name, name, phone, email, avatarUrl, avatar_url, role, role_title, color,
+      workingDays, startTime, endTime, breakStartTime, break_start_time, breakEndTime, break_end_time,
+      leaveFrom, leaveTo, clearLeave, unavailableDates, unavailable_dates,
+      password, home_address, homeAddress, home_postcode, homePostcode, dutyStatus, duty_status
+    } = req.body;
 
     let existing;
     if (strId.startsWith('stf-')) {
@@ -536,6 +570,30 @@ const updateStaff = async (req, res, next) => {
     const staffHomeAddress = home_address || homeAddress || null;
     const staffHomePostcode = home_postcode || homePostcode || null;
     const staffDutyStatus = dutyStatus || duty_status || null;
+    const breakStart = breakStartTime || break_start_time || null;
+    const breakEnd = breakEndTime || break_end_time || null;
+
+    let hasLeaveUpdate = false;
+    let finalUnavailJson = null;
+
+    if (clearLeave === 'true' || clearLeave === true) {
+      hasLeaveUpdate = true;
+      finalUnavailJson = null;
+    } else if (leaveFrom && leaveTo) {
+      hasLeaveUpdate = true;
+      const dateList = generateDateRange(leaveFrom, leaveTo);
+      finalUnavailJson = dateList.length > 0 ? JSON.stringify(dateList) : null;
+    } else if (leaveTo) {
+      hasLeaveUpdate = true;
+      const todayStr = new Date().toISOString().split('T')[0];
+      const dateList = generateDateRange(todayStr, leaveTo);
+      finalUnavailJson = dateList.length > 0 ? JSON.stringify(dateList) : null;
+    } else if (unavailableDates !== undefined || unavailable_dates !== undefined) {
+      hasLeaveUpdate = true;
+      const raw = unavailableDates !== undefined ? unavailableDates : unavailable_dates;
+      finalUnavailJson = typeof raw === 'string' ? raw : JSON.stringify(raw);
+    }
+
     await connection.query(
       `UPDATE staff_profiles SET 
         role_title = COALESCE(?, role_title),
@@ -543,11 +601,21 @@ const updateStaff = async (req, res, next) => {
         working_days_json = COALESCE(?, working_days_json),
         work_start_time = COALESCE(?, work_start_time),
         work_end_time = COALESCE(?, work_end_time),
+        break_start_time = COALESCE(?, break_start_time),
+        break_end_time = COALESCE(?, break_end_time),
         home_address = CASE WHEN ? IS NOT NULL THEN ? ELSE home_address END,
         home_postcode = CASE WHEN ? IS NOT NULL THEN ? ELSE home_postcode END,
-        duty_status = COALESCE(?, duty_status)
+        duty_status = COALESCE(?, duty_status),
+        unavailable_dates_json = CASE WHEN ? = 1 THEN ? ELSE unavailable_dates_json END
        WHERE id = ?`,
-      [staffRoleTitle, color, daysJson, startTime, endTime, staffHomeAddress, staffHomeAddress, staffHomePostcode, staffHomePostcode, staffDutyStatus, profileId]
+      [
+        staffRoleTitle, color, daysJson, startTime, endTime,
+        breakStart, breakEnd,
+        staffHomeAddress, staffHomeAddress, staffHomePostcode, staffHomePostcode,
+        staffDutyStatus,
+        hasLeaveUpdate ? 1 : 0, finalUnavailJson,
+        profileId
+      ]
     );
 
     await connection.commit();

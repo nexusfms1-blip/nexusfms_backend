@@ -18,6 +18,10 @@ const dispatchN8NWebhook = async (eventType, payload) => {
   let formattedPayload = payload ? { ...payload } : {};
 
   if (eventType === 'TASK_ASSIGNED') {
+    if (process.env.DISABLE_CONTRACTOR_ASSIGNMENT_NOTIFICATIONS === 'true') {
+      console.log('[N8N_WEBHOOK] 🛑 TASK_ASSIGNED webhook suppressed (DISABLE_CONTRACTOR_ASSIGNMENT_NOTIFICATIONS=true)');
+      return { success: true, suppressed: true };
+    }
     const frontendBase = getFrontendBaseUrl();
     const workOrderId = formattedPayload.workOrderId || formattedPayload.entityId || formattedPayload.relatedEntityId || null;
     const techRecipient = formattedPayload.technicianPhone || formattedPayload.technicianEmail || formattedPayload.contactPhone || formattedPayload.contactEmail || formattedPayload.to || formattedPayload.email || '';
@@ -673,6 +677,13 @@ const dispatchN8NWebhook = async (eventType, payload) => {
   }
 
   if (eventType === 'ADMIN_OFFICE_ALERT') {
+    if (process.env.DISABLE_ADMIN_EMAIL_NOTIFICATIONS === 'true') {
+      // Do not suppress alerts explicitly destined for Property Managers
+      if (formattedPayload.alertType !== 'BOOKING_CONFIRMED_MANAGER' && formattedPayload.alertType !== 'QUOTE_SENT_TO_MANAGER') {
+        console.log(`[N8N_WEBHOOK] 🛑 ADMIN_OFFICE_ALERT (${formattedPayload.alertType}) suppressed (DISABLE_ADMIN_EMAIL_NOTIFICATIONS=true)`);
+        return { success: true, suppressed: true };
+      }
+    }
     const frontendBase = getFrontendBaseUrl();
     const workOrderId = formattedPayload.workOrderId || formattedPayload.entityId || formattedPayload.relatedEntityId || null;
 
@@ -696,7 +707,7 @@ const dispatchN8NWebhook = async (eventType, payload) => {
       recipientStr = recipientStr.join(', ');
     }
     if (!recipientStr || recipientStr.trim() === '') {
-      recipientStr = 'admin@nexusfms.com';
+      recipientStr = process.env.MAIN_COMPANY_EMAIL || 'info@nexusfms.com';
     }
     formattedPayload.recipientEmail = recipientStr;
 
@@ -877,7 +888,7 @@ const getAdminAndOfficeRecipientEmail = async (dbPoolOrConnection) => {
   } catch (err) {
     console.warn('[N8N_WEBHOOK] Could not resolve admin/office recipient emails from DB:', err.message);
   }
-  return 'admin@nexusfms.com';
+  return process.env.MAIN_COMPANY_EMAIL || 'info@nexusfms.com';
 };
 
 module.exports = {

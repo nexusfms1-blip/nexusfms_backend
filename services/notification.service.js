@@ -11,6 +11,24 @@ const SENSITIVE_FINANCIAL_FIELDS = [
   'total_job_cost', 'revenue', 'profit', 'margin', 'cost'
 ];
 
+const MANAGER_AGENCY_DOMAINS = [
+  'jlgroup.uk',
+  'martinco.com',
+  'sequencehome.co.uk',
+  'robertaston.com',
+  'burchelledwards.co.uk',
+  'apmaintenance.uk',
+  'nexusfms.com',
+  'allpurposegroup.co.uk'
+];
+
+const isManagerEmailAddress = (email, managerEmail = null) => {
+  if (!email || typeof email !== 'string') return false;
+  const lower = email.toLowerCase().trim();
+  if (managerEmail && lower === managerEmail.toLowerCase().trim()) return true;
+  return MANAGER_AGENCY_DOMAINS.some(d => lower.endsWith('@' + d) || lower.includes('@' + d));
+};
+
 const sanitizePayload = (role, dataPayload) => {
   if (!dataPayload) return null;
   if (role === 'OFFICE_ADMIN') return dataPayload; 
@@ -124,10 +142,13 @@ const notificationService = {
       }
 
       // Automatic fallback: if contactPhone or contactEmail is missing, resolve directly from work_orders & residents
-      if ((!contactPhone || !contactEmail) && relatedEntityType === 'work_orders' && relatedEntityId) {
+      // Tenant-only actions (Booking Requests & Quote Photo Requests) are strictly SMS-based — never fallback contactEmail for them!
+      const isTenantSmsOnlyAction = type === 'BOOKING_REQUEST' || type === 'BOOKING_REMINDER' || type === 'QUOTE_PHOTO_REQUEST' || type === 'QUOTE_PHOTO_REMINDER' || !channels.includes('EMAIL');
+
+      if ((!contactPhone || (!contactEmail && !isTenantSmsOnlyAction)) && relatedEntityType === 'work_orders' && relatedEntityId) {
         try {
           const [woRows] = await db.query(
-            `SELECT w.contact_phone, w.contact_email, r.phone as res_phone, r.email as res_email 
+            `SELECT w.contact_phone, w.contact_email, w.manager_email, r.phone as res_phone, r.email as res_email 
              FROM work_orders w 
              LEFT JOIN residents r ON w.resident_id = r.id 
              WHERE w.id = ?`,
@@ -135,11 +156,23 @@ const notificationService = {
           );
           if (woRows.length > 0) {
             if (!contactPhone) contactPhone = woRows[0].contact_phone || woRows[0].res_phone || null;
-            if (!contactEmail) contactEmail = woRows[0].contact_email || woRows[0].res_email || null;
+            if (!contactEmail && !isTenantSmsOnlyAction) {
+              const candidate = woRows[0].contact_email || woRows[0].res_email || null;
+              // Guard: Never use a property manager email for tenant notifications
+              if (candidate && !isManagerEmailAddress(candidate, woRows[0].manager_email)) {
+                contactEmail = candidate;
+              }
+            }
           }
         } catch (e) {
           console.warn('[NotificationService] Fallback contact info lookup failed:', e.message);
         }
+      }
+
+      // Safeguard: If this is a tenant-facing booking/photo link, ensure contactEmail is ALWAYS NULL
+      // so neither internal email nor N8N automation can ever send an email to managers or tenants.
+      if (isTenantSmsOnlyAction) {
+        contactEmail = null;
       }
 
       if (channels.includes('EMAIL') && contactEmail) {
@@ -185,7 +218,7 @@ const notificationService = {
           title,
           message: finalMessage,
           recipientUserId,
-          contactEmail,
+          contactEmail: isTenantSmsOnlyAction ? null : contactEmail,
           contactPhone,
           actionUrl,
           entityType: relatedEntityType,
