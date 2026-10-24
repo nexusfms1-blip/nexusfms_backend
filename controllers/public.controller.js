@@ -661,7 +661,7 @@ const submitPublicBooking = async (req, res, next) => {
 
       await notificationService.dispatch({
         recipientUserId: null,
-        recipientRole: 'OFFICE_ADMIN',
+        recipientRole: 'PROPERTY_MANAGER',
         type: 'SENDER_BOOKING_CONFIRMATION',
         title: emailSubject,
         messageTemplate: emailBody,
@@ -681,7 +681,7 @@ const submitPublicBooking = async (req, res, next) => {
       if (mgrEmail && origSenderEmail && mgrEmail.toLowerCase() !== origSenderEmail.toLowerCase()) {
         await notificationService.dispatch({
           recipientUserId: null,
-          recipientRole: 'OFFICE_ADMIN',
+          recipientRole: 'PROPERTY_MANAGER',
           type: 'MANAGER_BOOKING_CONFIRMATION',
           title: emailSubject,
           messageTemplate: emailBody,
