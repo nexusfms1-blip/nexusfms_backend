@@ -433,6 +433,42 @@ const handleIncomingEmailQuote = async (req, res) => {
         });
       }
 
+      // Task 2: Instant automated acknowledgment reply sent to Property Manager upon receiving work order / quote request
+      const targetManagerEmail = manager_email || normalizedSenderEmail;
+      if (targetManagerEmail && typeof targetManagerEmail === 'string' && targetManagerEmail.includes('@')) {
+        const notificationService = require('../services/notification.service');
+        const ackMessage = 'Thank you for your email, this work order has been acknowledge. We will get a quote sent over as soon as possible. If you have any questions please let me know, Thank you';
+
+        notificationService.dispatch({
+          recipientRole: 'PROPERTY_MANAGER',
+          type: 'WORK_ORDER_ACKNOWLEDGED_MANAGER',
+          title: `Work Order Acknowledged - #`,
+          messageTemplate: ackMessage,
+          contactEmail: targetManagerEmail,
+          relatedEntityType: 'work_orders',
+          relatedEntityId: createdWorkOrderId,
+          channels: ['EMAIL'],
+          structuredData: {
+            jobNumber: createdJobNumber,
+            workOrderId: createdWorkOrderId,
+            propertyAddress: normalizedAddress,
+            managerName: mgrDisplayName || 'Property Manager',
+            managerEmail: targetManagerEmail,
+            message: ackMessage,
+          }
+        }).catch(err => {
+          console.error('[Webhook Quotes] Error dispatching manager acknowledgment auto-reply:', err.message);
+        });
+
+        // Record timestamp in work_orders
+        pool.query(
+          'UPDATE work_orders SET manager_ack_email_sent_at = NOW() WHERE id = ?',
+          [createdWorkOrderId]
+        ).catch(err => {
+          console.error('[Webhook Quotes] Error recording manager_ack_email_sent_at:', err.message);
+        });
+      }
+
       console.log(`[Webhook Quotes] ✓ Successfully created Work Order #${createdJobNumber} (ID: ${createdWorkOrderId}) from email reference ${normalizedRefId}`);
 
       return res.status(201).json({

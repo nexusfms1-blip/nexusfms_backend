@@ -139,6 +139,9 @@ const formatJobRow = (r, role) => {
     cancelledAt: r.cancelled_at || null,
     previousAppointmentDate: formatDateToISO(r.previous_appointment_date),
     previousAppointmentTime: r.previous_appointment_time || null,
+    tenantContactedAt: r.tenant_contacted_at || null,
+    pmNoReplyEscalatedAt: r.pm_no_reply_escalated_at || null,
+    managerAckEmailSentAt: r.manager_ack_email_sent_at || null,
   };
 
   // Financials

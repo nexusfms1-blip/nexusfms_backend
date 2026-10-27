@@ -66,7 +66,10 @@ const runAutoMigrations = async () => {
       { name: 'detected_category', ddl: "ALTER TABLE work_orders ADD COLUMN detected_category VARCHAR(100) DEFAULT NULL" },
       { name: 'external_reference_id', ddl: "ALTER TABLE work_orders ADD COLUMN external_reference_id VARCHAR(255) DEFAULT NULL" },
       { name: 'original_sender_email', ddl: "ALTER TABLE work_orders ADD COLUMN original_sender_email VARCHAR(191) DEFAULT NULL" },
-      { name: 'work_order_reference', ddl: "ALTER TABLE work_orders ADD COLUMN work_order_reference VARCHAR(100) DEFAULT NULL" }
+      { name: 'work_order_reference', ddl: "ALTER TABLE work_orders ADD COLUMN work_order_reference VARCHAR(100) DEFAULT NULL" },
+      { name: 'tenant_contacted_at', ddl: "ALTER TABLE work_orders ADD COLUMN tenant_contacted_at DATETIME DEFAULT NULL" },
+      { name: 'pm_no_reply_escalated_at', ddl: "ALTER TABLE work_orders ADD COLUMN pm_no_reply_escalated_at DATETIME DEFAULT NULL" },
+      { name: 'manager_ack_email_sent_at', ddl: "ALTER TABLE work_orders ADD COLUMN manager_ack_email_sent_at DATETIME DEFAULT NULL" }
     ];
 
     for (const col of optionalColumns) {

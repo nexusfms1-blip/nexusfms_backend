@@ -517,7 +517,12 @@ const dispatchN8NWebhook = async (eventType, payload) => {
     }
   }
 
-  if (eventType === 'SENDER_BOOKING_CONFIRMATION' || eventType === 'MANAGER_BOOKING_CONFIRMATION') {
+  if (
+    eventType === 'SENDER_BOOKING_CONFIRMATION' || 
+    eventType === 'MANAGER_BOOKING_CONFIRMATION' ||
+    eventType === 'TENANT_NO_REPLY_ESCALATION' ||
+    eventType === 'WORK_ORDER_ACKNOWLEDGED_MANAGER'
+  ) {
     const frontendBase = getFrontendBaseUrl();
     const workOrderId = formattedPayload.workOrderId || formattedPayload.entityId || formattedPayload.relatedEntityId || null;
     const targetEmail = formattedPayload.contactEmail || formattedPayload.email || formattedPayload.data?.contactEmail || formattedPayload.data?.email || null;

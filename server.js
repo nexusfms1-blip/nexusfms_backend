@@ -123,6 +123,8 @@ app.listen(PORT, async () => {
   // Initialize Background Schedulers
   const { initScheduler } = require('./scheduler/photoReminderJob');
   const { initBookingScheduler } = require('./scheduler/bookingReminderJob');
+  const { initTenantNoReplyScheduler } = require('./scheduler/tenantNoReplyEscalationJob');
   initScheduler();
   initBookingScheduler();
+  initTenantNoReplyScheduler();
 });

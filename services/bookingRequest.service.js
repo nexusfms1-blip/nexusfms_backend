@@ -82,6 +82,12 @@ const triggerAutoBookingRequest = async (workOrderId) => {
     
     console.log(`[BookingRequestService] Auto booking request generated for Job #${workOrderId} to ${residentPhone || 'N/A'}`);
 
+        // Set tenant_contacted_at if not already recorded
+    await pool.query(
+      'UPDATE work_orders SET tenant_contacted_at = COALESCE(tenant_contacted_at, NOW()) WHERE id = ?',
+      [workOrderId]
+    ).catch(e => console.warn('[BookingRequestService] Could not update tenant_contacted_at:', e.message));
+
     return {
       success: true,
       token,

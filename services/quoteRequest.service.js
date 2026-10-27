@@ -112,6 +112,12 @@ const triggerAutoPhotoRequest = async (workOrderId) => {
     
     console.log(`[QuoteRequestService] Auto photo request generated and dispatched for Job #${workOrderId} to ${residentPhone || 'N/A'}`);
 
+        // Set tenant_contacted_at if not already recorded
+    await pool.query(
+      'UPDATE work_orders SET tenant_contacted_at = COALESCE(tenant_contacted_at, NOW()) WHERE id = ?',
+      [workOrderId]
+    ).catch(e => console.warn('[QuoteRequestService] Could not update tenant_contacted_at:', e.message));
+
     return {
       success: true,
       token: finalToken,
