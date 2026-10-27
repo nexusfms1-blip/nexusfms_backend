@@ -517,6 +517,63 @@ const dispatchN8NWebhook = async (eventType, payload) => {
     }
   }
 
+  if (eventType === 'SENDER_BOOKING_CONFIRMATION' || eventType === 'MANAGER_BOOKING_CONFIRMATION') {
+    const frontendBase = getFrontendBaseUrl();
+    const workOrderId = formattedPayload.workOrderId || formattedPayload.entityId || formattedPayload.relatedEntityId || null;
+    const targetEmail = formattedPayload.contactEmail || formattedPayload.email || formattedPayload.data?.contactEmail || formattedPayload.data?.email || null;
+    const targetName = formattedPayload.manager_name || formattedPayload.data?.manager_name || 'Property Manager';
+
+    formattedPayload.email = targetEmail;
+    formattedPayload.contactEmail = targetEmail;
+    formattedPayload.recipientEmail = targetEmail;
+    formattedPayload.to = targetEmail;
+    formattedPayload.managerEmail = targetEmail;
+    formattedPayload.name = targetName;
+    formattedPayload.managerName = targetName;
+    formattedPayload.recipientName = targetName;
+    formattedPayload.actionUrl = formattedPayload.actionUrl || `${frontendBase}/admin/calendar`;
+    formattedPayload.subject = formattedPayload.title || 'Booking Confirmed';
+
+    if (workOrderId && (!formattedPayload.propertyAddress || !formattedPayload.jobNumber)) {
+      try {
+        const { pool } = require('../config/db');
+        const [woRows] = await pool.query(
+          'SELECT job_number, title, property_address, resident_name, scheduled_date, scheduled_time_slot, manager_name, manager_email, original_sender_email FROM work_orders WHERE id = ?',
+          [workOrderId]
+        );
+        if (woRows.length > 0) {
+          const row = woRows[0];
+          formattedPayload.jobNumber = formattedPayload.jobNumber || row.job_number;
+          formattedPayload.title = formattedPayload.title || row.title;
+          formattedPayload.propertyAddress = formattedPayload.propertyAddress || row.property_address;
+          formattedPayload.residentName = formattedPayload.residentName || row.resident_name;
+          formattedPayload.scheduledDate = formattedPayload.scheduledDate || row.scheduled_date;
+          formattedPayload.scheduledTimeSlot = formattedPayload.scheduledTimeSlot || row.scheduled_time_slot;
+          if (!formattedPayload.email) {
+            formattedPayload.email = row.original_sender_email || row.manager_email;
+            formattedPayload.to = formattedPayload.email;
+            formattedPayload.contactEmail = formattedPayload.email;
+          }
+        }
+      } catch (e) {
+        console.warn('[N8N_WEBHOOK] Could not enrich sender confirmation details:', e.message);
+      }
+    }
+
+    if (formattedPayload.data && typeof formattedPayload.data === 'object') {
+      formattedPayload.data.email = formattedPayload.email;
+      formattedPayload.data.to = formattedPayload.to;
+      formattedPayload.data.contactEmail = formattedPayload.contactEmail;
+      formattedPayload.data.managerEmail = formattedPayload.email;
+      formattedPayload.data.name = formattedPayload.name;
+      formattedPayload.data.managerName = formattedPayload.name;
+      formattedPayload.data.subject = formattedPayload.subject;
+      formattedPayload.data.message = formattedPayload.message;
+      formattedPayload.data.propertyAddress = formattedPayload.propertyAddress;
+      formattedPayload.data.jobNumber = formattedPayload.jobNumber;
+    }
+  }
+
   if (eventType === 'BOOKING_CONFIRMED') {
     const frontendBase = getFrontendBaseUrl();
     const workOrderId = formattedPayload.workOrderId || formattedPayload.entityId || formattedPayload.relatedEntityId || null;

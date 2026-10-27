@@ -23,6 +23,9 @@ const getBookingRequests = async (req, res, next) => {
         w.property_address as address,
         w.description as description,
         w.resident_id as tenantId,
+        w.manager_name as managerName,
+        w.manager_email as managerEmail,
+        w.original_sender_email as originalSenderEmail,
         COALESCE(w.duration_hours, 1.5) as durationHours,
         COALESCE(u.full_name, 'Auto-assigned on booking') as assignedStaffName,
         CASE 
@@ -59,7 +62,11 @@ const generateBookingLink = async (req, res, next) => {
       assignmentPreference,
       earliestDate,
       internalNotes,
-      linkExpiryDays
+      linkExpiryDays,
+      managerEmail,
+      manager_email,
+      managerName,
+      manager_name,
     } = req.body;
 
     if (!tenantId || !description) {
@@ -95,6 +102,9 @@ const generateBookingLink = async (req, res, next) => {
       if (isNaN(staffPrefId)) staffPrefId = null;
     }
 
+    const resolvedManagerEmail = (managerEmail || manager_email || (req.user ? req.user.email : null) || '').trim() || null;
+    const resolvedManagerName = (managerName || manager_name || (req.user ? req.user.full_name : null) || '').trim() || null;
+
     await connection.beginTransaction();
 
     // 3. Create work order
@@ -102,8 +112,8 @@ const generateBookingLink = async (req, res, next) => {
       `INSERT INTO work_orders (
         job_number, title, resident_id, resident_name, contact_phone, contact_email,
         property_address, description, duration_hours, pipeline_stage,
-        assigned_staff_id, secure_token, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        assigned_staff_id, secure_token, created_by, manager_name, manager_email, original_sender_email
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         jobNumber,
         description,
@@ -117,7 +127,10 @@ const generateBookingLink = async (req, res, next) => {
         'Jobs Waiting Booking',
         staffPrefId,
         secureToken,
-        req.user.id
+        req.user ? req.user.id : null,
+        resolvedManagerName,
+        resolvedManagerEmail,
+        resolvedManagerEmail
       ]
     );
 
@@ -191,7 +204,11 @@ const updateBookingRequest = async (req, res, next) => {
       earliestDate,
       internalNotes,
       linkExpiryDays,
-      priority
+      priority,
+      managerEmail,
+      manager_email,
+      managerName,
+      manager_name,
     } = req.body;
 
     // 1. Fetch existing booking request to get work_order_id
@@ -265,6 +282,16 @@ const updateBookingRequest = async (req, res, next) => {
     if (priority !== undefined) {
       updateJobFields.push('priority = ?');
       updateJobParams.push(priority);
+    }
+    const updateMgrEmail = managerEmail !== undefined ? managerEmail : manager_email;
+    if (updateMgrEmail !== undefined) {
+      updateJobFields.push('manager_email = ?', 'original_sender_email = COALESCE(original_sender_email, ?)');
+      updateJobParams.push(updateMgrEmail ? updateMgrEmail.trim() : null, updateMgrEmail ? updateMgrEmail.trim() : null);
+    }
+    const updateMgrName = managerName !== undefined ? managerName : manager_name;
+    if (updateMgrName !== undefined) {
+      updateJobFields.push('manager_name = ?');
+      updateJobParams.push(updateMgrName ? updateMgrName.trim() : null);
     }
     
     // Always sync assigned_staff_id with preferred staff ID
