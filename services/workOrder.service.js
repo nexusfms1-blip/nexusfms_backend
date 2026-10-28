@@ -57,6 +57,13 @@ const createWorkOrderEntity = async (data, user = null, dbConnection = null) => 
   let resId = resident_id || tenantId || null;
   let resName = (resident_name || tenantName || '').trim();
   let resPhone = (contact_phone || phone || contactPhone || '').trim();
+
+  // Auto-detect inverted resident_name and contact_phone
+  if (/^(\+?\d[\d\s-]{7,15})$/.test(resName) && /[a-zA-Z]{3,}/.test(resPhone) && !/\d{5,}/.test(resPhone)) {
+    const temp = resName;
+    resName = resPhone;
+    resPhone = temp;
+  }
   let resAddress = (property_address || address || '').trim();
   let resEmail = (contact_email || email || contactEmail || '').trim() || null;
 

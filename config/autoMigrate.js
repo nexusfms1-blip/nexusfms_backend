@@ -42,13 +42,16 @@ const runAutoMigrations = async () => {
       console.warn('  ⚠️ [Auto-Migration] Could not verify job_material_costs table:', err.message);
     }
 
-    // 3. Ensure users table role ENUM includes OFFICE_TEAM
+    // 3. Ensure users table role ENUM includes OFFICE_TEAM & has push_token
     try {
       await pool.query("ALTER TABLE users MODIFY COLUMN role ENUM('OFFICE_ADMIN', 'OFFICE_TEAM', 'MAINTENANCE_STAFF') NOT NULL DEFAULT 'MAINTENANCE_STAFF'");
       console.log('  ✓ [Auto-Migration] users.role ENUM verified');
     } catch (err) {
       console.warn('  ⚠️ [Auto-Migration] Could not verify users.role:', err.message);
     }
+    try {
+      await pool.query("ALTER TABLE users ADD COLUMN push_token VARCHAR(255) DEFAULT NULL");
+    } catch (err) {}
 
     // 4. Ensure work_orders table has all required columns safely
     const optionalColumns = [

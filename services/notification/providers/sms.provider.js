@@ -9,6 +9,10 @@
 const { normalizePhoneNumber } = require('../../../utils/phoneNormalizer');
 
 const sendSms = async ({ to, message }) => {
+  if (!to || !/\d{5,}/.test(String(to))) {
+    console.warn('[TWILIO_SMS] ⚠ Skipping SMS dispatch: not a valid phone number: ' + to);
+    return { success: false, skipped: true, reason: 'Invalid phone number format' };
+  }
   const normalizedTo = normalizePhoneNumber(to);
   const twilioSid = process.env.TWILIO_ACCOUNT_SID;
   const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN;

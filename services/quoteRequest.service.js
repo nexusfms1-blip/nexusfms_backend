@@ -100,11 +100,30 @@ const triggerAutoPhotoRequest = async (workOrderId) => {
       propertyAddress
     });
 
-    // STRICT CLIENT REQUIREMENT (Oct 24):
-    // "Property managers should only get email for job booking confirmation nothing else"
-    // NEW_QUOTE_REQUEST_ACK has been disabled. Property Managers will ONLY receive the 
-    // Booking Confirmation email once the resident selects their appointment slot.
-    console.log(`[QuoteRequestService] Manager email acknowledged silently (no email sent per client requirement): ${managerEmail || 'N/A'}`);
+    // CLIENT REQUIREMENT (Oct 27 Update):
+    // "When quotes are sent, we need to send a reply to the manager saying:
+    //  Thank you for your email, this work order has been acknowledge. We will get a quote sent over as soon as possible. If you have any questions please let me know, Thank you"
+    if (managerEmail && typeof managerEmail === 'string' && managerEmail.includes('@')) {
+      const notificationService = require('./notification.service');
+      const ackMessage = 'Thank you for your email, this work order has been acknowledge. We will get a quote sent over as soon as possible. If you have any questions please let me know, Thank you';
+      notificationService.dispatch({
+        recipientRole: 'PROPERTY_MANAGER',
+        type: 'WORK_ORDER_ACKNOWLEDGED_MANAGER',
+        title: `Work Order Acknowledged - #${job.job_number || workOrderId}`,
+        messageTemplate: ackMessage,
+        contactEmail: managerEmail,
+        relatedEntityType: 'work_orders',
+        relatedEntityId: workOrderId,
+        channels: ['EMAIL'],
+        structuredData: {
+          jobNumber: job.job_number,
+          workOrderId,
+          propertyAddress,
+          managerEmail,
+          message: ackMessage,
+        }
+      }).catch(err => console.warn('[QuoteRequestService] Failed to dispatch manager ack email:', err.message));
+    }
 
     // Agar manager ko koi notification deni ho toh alag se aur alag event se bhejna
     // jaise 'ADMIN_OFFICE_ALERT' - yahan nahi.
