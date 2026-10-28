@@ -14,6 +14,8 @@ const pool = mysql.createPool({
   queueLimit: 0,
   enableKeepAlive: true,
   keepAliveInitialDelay: 10000,
+  dateStrings: true,
+  timezone: '+00:00',
 });
 
 // Test database connection helper

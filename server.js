@@ -1,3 +1,5 @@
+// Set UK Timezone for all date calculations and schedulers
+process.env.TZ = process.env.TZ || 'Europe/London';
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');

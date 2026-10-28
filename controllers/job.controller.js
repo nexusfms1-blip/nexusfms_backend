@@ -12,7 +12,10 @@ const { buildWorkReference, extractReferenceFromText } = require('../utils/workR
 // Helper to format any date input to strict YYYY-MM-DD
 const formatDateToISO = (d) => {
   if (!d) return null;
-  if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+  if (typeof d === 'string') {
+    const match = d.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (match) return match[1];
+  }
   const dateObj = new Date(d);
   if (isNaN(dateObj.getTime())) {
     const match = String(d).match(/(\d{4})-(\d{2})-(\d{2})/);
