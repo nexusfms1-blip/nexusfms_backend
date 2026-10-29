@@ -840,7 +840,8 @@ const completeJobAtomic = async (req, res, next) => {
     const staffProfileId = await getStaffProfileId(req.user.id);
     const { completion_report, materials } = req.body;
 
-    if (req.user.role !== 'MAINTENANCE_STAFF') {
+    const isOfficeRole = ['OFFICE_ADMIN', 'OFFICE_TEAM', 'SUPER_ADMIN'].includes(req.user.role);
+    if (req.user.role !== 'MAINTENANCE_STAFF' && !isOfficeRole) {
       if (req.files) Object.values(req.files).flat().forEach(f => fs.unlink(f.path, () => {}));
       connection.release();
       return res.status(403).json({ success: false, message: 'Forbidden. Only Maintenance Staff can complete jobs.' });
@@ -934,7 +935,7 @@ const completeJobAtomic = async (req, res, next) => {
         isAssigned = true;
       }
     }
-    if (job.assigned_staff_id !== staffProfileId && !isAssigned) {
+    if (!isOfficeRole && job.assigned_staff_id !== staffProfileId && !isAssigned) {
       throw { status: 403, message: 'Forbidden. You can only complete your own assigned work order.' };
     }
 
@@ -949,12 +950,12 @@ const completeJobAtomic = async (req, res, next) => {
       completionId = existingReport[0].id;
       await connection.query(
         "UPDATE staff_job_completions SET work_report_summary = ?, staff_id = ?, completion_status = 'COMPLETED', completed_at = NOW() WHERE id = ?",
-        [completion_report.trim(), staffProfileId, completionId]
+        [completion_report.trim(), staffProfileId || job.assigned_staff_id || null, completionId]
       );
     } else {
       const [insertRes] = await connection.query(
         "INSERT INTO staff_job_completions (work_order_id, staff_id, work_report_summary, completion_status, completed_at) VALUES (?, ?, ?, 'COMPLETED', NOW())",
-        [id, staffProfileId, completion_report.trim()]
+        [id, staffProfileId || job.assigned_staff_id || null, completion_report.trim()]
       );
       completionId = insertRes.insertId;
     }
@@ -1013,7 +1014,9 @@ const completeJobAtomic = async (req, res, next) => {
     );
 
     // Provide KPI points
-    await connection.query("UPDATE staff_profiles SET jobs_completed = jobs_completed + 1 WHERE id = ?", [staffProfileId]);
+    if (staffProfileId || job.assigned_staff_id) {
+      await connection.query("UPDATE staff_profiles SET jobs_completed = jobs_completed + 1 WHERE id = ?", [staffProfileId || job.assigned_staff_id]);
+    }
 
     await connection.commit();
     connection.release();

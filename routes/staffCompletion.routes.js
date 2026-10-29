@@ -34,7 +34,7 @@ router.get('/jobs/:id/completion', getJobCompletionEvidence);
 // Edit completion evidence for an already-completed job (own jobs only)
 router.put(
   '/jobs/:id/completion-evidence',
-  authorizeRoles('MAINTENANCE_STAFF'),
+  authorizeRoles('MAINTENANCE_STAFF', 'OFFICE_ADMIN', 'OFFICE_TEAM', 'SUPER_ADMIN'),
   upload.fields([{ name: 'beforePhotos' }, { name: 'afterPhotos' }, { name: 'receipts' }]),
   updateCompletedJobEvidence
 );
@@ -42,12 +42,12 @@ router.put(
 // Delete completed job completion media item
 router.delete(
   '/media/:mediaId',
-  authorizeRoles('MAINTENANCE_STAFF'),
+  authorizeRoles('MAINTENANCE_STAFF', 'OFFICE_ADMIN', 'OFFICE_TEAM', 'SUPER_ADMIN'),
   deleteCompletionMedia
 );
 
 // Inventory picker for technician materials selection
-router.get('/inventory', authorizeRoles('MAINTENANCE_STAFF', 'OFFICE_ADMIN'), getStaffInventoryItems);
+router.get('/inventory', authorizeRoles('MAINTENANCE_STAFF', 'OFFICE_ADMIN', 'OFFICE_TEAM', 'SUPER_ADMIN'), getStaffInventoryItems);
 
 module.exports = {
   staffCompletionRouter: router,

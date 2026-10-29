@@ -42,12 +42,12 @@ router.put('/:id/stage', authorizeRoles('OFFICE_ADMIN', 'OFFICE_TEAM', 'MAINTENA
 router.put('/:id/status', updateJobStatus);
 
 // Cancel/Reschedule Endpoint (Maintenance Staff Only)
-router.post('/:id/cancel', authorizeRoles('MAINTENANCE_STAFF'), upload.single('proof'), cancelJob);
+router.post('/:id/cancel', authorizeRoles('MAINTENANCE_STAFF', 'OFFICE_ADMIN', 'OFFICE_TEAM', 'SUPER_ADMIN'), upload.single('proof'), cancelJob);
 
 // Atomic Completion Endpoint (Maintenance Staff Only)
 router.post(
   '/:id/complete',
-  authorizeRoles('MAINTENANCE_STAFF'),
+  authorizeRoles('MAINTENANCE_STAFF', 'OFFICE_ADMIN', 'OFFICE_TEAM', 'SUPER_ADMIN'),
   upload.fields([{ name: 'beforePhotos' }, { name: 'afterPhotos' }, { name: 'receipts' }]),
   completeJobAtomic
 );
