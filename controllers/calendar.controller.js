@@ -117,7 +117,7 @@ const getCalendar = async (req, res, next) => {
 
     // Filter by Staff ID
     if (req.user.role === 'MAINTENANCE_STAFF') {
-      sql += ' AND (w.assigned_staff_id = ? OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(? AS CHAR), "$")))';
+      sql += ' AND (w.assigned_staff_id = ? AND ? IS NOT NULL)';
       queryParams.push(staffProfileId, staffProfileId);
     } else if (staffId && staffId !== 'ALL') {
       const cleanId = parseInt(String(staffId).replace(/^(stf-|usr-)/, ''), 10);

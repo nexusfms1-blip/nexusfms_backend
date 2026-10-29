@@ -96,7 +96,7 @@ const getMyAssignedJobs = async (req, res, next) => {
 
     // Office Admin views all, Staff views ONLY assigned jobs
     if (req.user.role === 'MAINTENANCE_STAFF') {
-      sql += ' WHERE (w.assigned_staff_id = ? OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(? AS CHAR), "$")))';
+      sql += ' WHERE (w.assigned_staff_id = ? AND ? IS NOT NULL)';
       queryParams.push(staffProfileId, staffProfileId);
     }
 

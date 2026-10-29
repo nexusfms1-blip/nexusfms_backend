@@ -226,7 +226,7 @@ const getJobs = async (req, res, next) => {
     // Role-based data isolation
     if (req.user && req.user.role === 'MAINTENANCE_STAFF') {
       if (req.user.staffProfileId) {
-        sql += ' AND (w.assigned_staff_id = ? OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(? AS CHAR), "$")))';
+        sql += ' AND (w.assigned_staff_id = ? AND ? IS NOT NULL)';
         queryParams.push(req.user.staffProfileId, req.user.staffProfileId);
       } else {
         // If they have no profile yet, they shouldn't see any jobs
