@@ -80,12 +80,20 @@ const calculateStaffAvailableSlots = async (staffProfileId, targetDate, duration
     };
   }
 
-  // Check Unavailable / Leave Dates
+  // Check Unavailable / Leave Dates (Supports full day strings and blocked time ranges)
   let unavail = staff.unavailable_dates_json;
   if (typeof unavail === 'string') {
     try { unavail = JSON.parse(unavail); } catch { unavail = []; }
   }
-  if (Array.isArray(unavail) && unavail.includes(targetDate)) {
+  const isFullDayBlocked = Array.isArray(unavail) && unavail.some(item => {
+    if (typeof item === 'string') return item === targetDate;
+    if (typeof item === 'object' && item !== null) {
+      return item.date === targetDate && (!item.startTime || item.isFullDay);
+    }
+    return false;
+  });
+
+  if (isFullDayBlocked) {
     return {
       success: true,
       reason: `Technician is on leave / scheduled off on ${targetDate}`,
@@ -125,6 +133,17 @@ const calculateStaffAvailableSlots = async (staffProfileId, targetDate, duration
       const startMin = timeToMinutes(parts[0]);
       const endMin = timeToMinutes(parts[1]);
       occupiedIntervals.push({ start: startMin, end: endMin });
+    }
+  }
+
+  // Include custom blocked time intervals for targetDate
+  if (Array.isArray(unavail)) {
+    for (const item of unavail) {
+      if (typeof item === 'object' && item !== null && item.date === targetDate && item.startTime && item.endTime) {
+        const bStart = timeToMinutes(item.startTime);
+        const bEnd = timeToMinutes(item.endTime);
+        occupiedIntervals.push({ start: bStart, end: bEnd });
+      }
     }
   }
 
