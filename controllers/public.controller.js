@@ -443,27 +443,13 @@ const submitPublicBooking = async (req, res, next) => {
       if (!isNaN(parsedId)) assignedStaffId = parsedId;
     }
 
-    // Auto-assign best available technician for this slot if not pre-assigned
-    if (!assignedStaffId) {
-      const multiAvail = await calculateMultiStaffAvailableSlots(dateVal, durationHours, null, jobDetails, connection);
-      const matchingSlot = multiAvail.availableSlots?.find(s => 
-        s.timeSlot === slotVal || 
-        s.startTime === slotVal || 
-        (s.startTime && slotVal.startsWith(s.startTime))
-      );
-      if (matchingSlot && matchingSlot.assignedStaffId) {
-        assignedStaffId = matchingSlot.assignedStaffId;
-      } else if (multiAvail.recommendedStaff) {
-        assignedStaffId = multiAvail.recommendedStaff.id;
-      }
-    }
-
+    // Strict Assigned Contractor Enforcement: A contractor must already be assigned by office admin
     if (!assignedStaffId) {
       await connection.rollback();
       connection.release();
       return res.status(400).json({
         success: false,
-        message: `Booking Rejected: No technicians are scheduled or available on ${dateVal}. Please choose a working date.`,
+        message: 'Booking Rejected: A contractor has not been assigned to this job yet. Please contact our office: 0121 769 1767.',
       });
     }
 

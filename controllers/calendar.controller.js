@@ -299,16 +299,22 @@ const getPublicBookingAvailableSlots = async (req, res, next) => {
     // 2. Calculate Available Slots for the Assigned/Eligible Technician(s)
     let availabilityResult;
     if (staffProfileId) {
-      const singleRes = await calculateStaffAvailableSlots(staffProfileId, date, durationHours);
-      if (singleRes.availableSlots && singleRes.availableSlots.length > 0) {
-        availabilityResult = singleRes;
-      } else {
-        // Fallback to multi-staff calculation if assigned staff is off or busy on this date
-        availabilityResult = await calculateMultiStaffAvailableSlots(date, durationHours, staffProfileId, jobDetails);
+      availabilityResult = await calculateStaffAvailableSlots(staffProfileId, date, durationHours);
+      if (!availabilityResult.availableSlots || availabilityResult.availableSlots.length === 0) {
+        availabilityResult = {
+          success: false,
+          reason: 'Your allocated technician is not available on this date. Please select another date.',
+          message: 'Your allocated technician is not available on this date. Please select another date.',
+          availableSlots: []
+        };
       }
     } else {
-      // Dynamic multi-staff calculation across all active technicians
-      availabilityResult = await calculateMultiStaffAvailableSlots(date, durationHours, null, jobDetails);
+      availabilityResult = {
+        success: false,
+        reason: 'A contractor has not yet been allocated to this job. Please contact our office: 0121 769 1767.',
+        message: 'A contractor has not yet been allocated to this job. Please contact our office: 0121 769 1767.',
+        availableSlots: []
+      };
     }
 
     res.status(200).json({

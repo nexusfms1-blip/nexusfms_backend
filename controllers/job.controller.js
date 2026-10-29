@@ -524,6 +524,17 @@ const moveJobStage = async (req, res, next) => {
       }
     }
 
+    // MANDATORY CONTRACTOR TICK/ASSIGNMENT RULE:
+    // A contractor MUST be assigned before moving to Jobs Waiting Booking (prevents random auto-assignment)
+    if (normalizedStage === 'Jobs Waiting Booking' || normalizedStage === 'Jobs Awaiting Booking' || normalizedStage === 'Waiting Job Booking') {
+      if (!existing[0].assigned_staff_id) {
+        return res.status(400).json({
+          success: false,
+          message: 'Validation Error: A contractor must be ticked/assigned before moving this job to Jobs Waiting Booking.',
+        });
+      }
+    }
+
     try {
       await pool.query('UPDATE work_orders SET pipeline_stage = ? WHERE id = ?', [normalizedStage, id]);
     } catch (dbErr) {
