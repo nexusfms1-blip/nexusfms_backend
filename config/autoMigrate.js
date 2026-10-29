@@ -59,6 +59,7 @@ const runAutoMigrations = async () => {
       { name: 'latitude', ddl: "ALTER TABLE work_orders ADD COLUMN latitude DECIMAL(10,8) DEFAULT NULL" },
       { name: 'longitude', ddl: "ALTER TABLE work_orders ADD COLUMN longitude DECIMAL(11,8) DEFAULT NULL" },
       { name: 'assigned_staff_ids', ddl: "ALTER TABLE work_orders ADD COLUMN assigned_staff_ids JSON DEFAULT NULL" },
+      { name: 'requires_multiple_contractors', ddl: "ALTER TABLE work_orders ADD COLUMN requires_multiple_contractors TINYINT(1) DEFAULT 0" },
       { name: 'manager_email', ddl: "ALTER TABLE work_orders ADD COLUMN manager_email VARCHAR(191) DEFAULT NULL" },
       { name: 'cancellation_type', ddl: "ALTER TABLE work_orders ADD COLUMN cancellation_type ENUM('TENANT_CANCELLED', 'TECHNICIAN_CANCELLED') DEFAULT NULL" },
       { name: 'cancellation_reason', ddl: "ALTER TABLE work_orders ADD COLUMN cancellation_reason TEXT DEFAULT NULL" },

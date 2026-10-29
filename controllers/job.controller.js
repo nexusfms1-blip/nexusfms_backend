@@ -886,6 +886,11 @@ const updateJobStatus = async (req, res, next) => {
       updates.push('assigned_staff_ids = ?');
       values.push(staffIdsJson);
     }
+    const reqMultipleVal = req.body.requires_multiple_contractors !== undefined ? req.body.requires_multiple_contractors : req.body.requiresMultipleContractors;
+    if (reqMultipleVal !== undefined) {
+      updates.push('requires_multiple_contractors = ?');
+      values.push(reqMultipleVal ? 1 : 0);
+    }
     if (quoteVal !== undefined) {
       updates.push('quote_amount = ?');
       values.push(quoteVal);

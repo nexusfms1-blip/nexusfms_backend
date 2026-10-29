@@ -385,7 +385,9 @@ const submitPublicBooking = async (req, res, next) => {
 
     // Verify token & lock work order row
     const [bookingRows] = await connection.query(
-      `SELECT b.id as request_id, b.work_order_id, b.assignment_preference_staff_id, w.assigned_staff_id, w.duration_hours, w.title, w.description, w.property_address 
+      `SELECT b.id as request_id, b.work_order_id, b.assignment_preference_staff_id, 
+              w.assigned_staff_id, w.assigned_staff_ids, w.requires_multiple_contractors,
+              w.duration_hours, w.title, w.description, w.property_address 
        FROM booking_requests b
        JOIN work_orders w ON b.work_order_id = w.id
        WHERE b.secure_token = ? FOR UPDATE`,
@@ -395,6 +397,8 @@ const submitPublicBooking = async (req, res, next) => {
     let workOrderId = null;
     let requestId = null;
     let assignedStaffId = null;
+    let assignedStaffIds = [];
+    let requiresMultiple = false;
     let durationHours = 1.5;
     let jobDetails = {};
 
@@ -403,6 +407,14 @@ const submitPublicBooking = async (req, res, next) => {
       workOrderId = b.work_order_id;
       requestId = b.request_id;
       assignedStaffId = b.assigned_staff_id || b.assignment_preference_staff_id;
+      requiresMultiple = Boolean(b.requires_multiple_contractors);
+      if (b.assigned_staff_ids) {
+        try {
+          assignedStaffIds = typeof b.assigned_staff_ids === 'string' ? JSON.parse(b.assigned_staff_ids) : b.assigned_staff_ids;
+        } catch {
+          assignedStaffIds = [];
+        }
+      }
       durationHours = parseFloat(b.duration_hours || 1.5);
       jobDetails = {
         title: b.title,
@@ -411,13 +423,21 @@ const submitPublicBooking = async (req, res, next) => {
       };
     } else {
       const [jobRows] = await connection.query(
-        'SELECT id, assigned_staff_id, duration_hours, title, description, property_address FROM work_orders WHERE secure_token = ? FOR UPDATE',
+        'SELECT id, assigned_staff_id, assigned_staff_ids, requires_multiple_contractors, duration_hours, title, description, property_address FROM work_orders WHERE secure_token = ? FOR UPDATE',
         [token]
       );
       if (jobRows.length > 0) {
         const j = jobRows[0];
         workOrderId = j.id;
         assignedStaffId = j.assigned_staff_id;
+        requiresMultiple = Boolean(j.requires_multiple_contractors);
+        if (j.assigned_staff_ids) {
+          try {
+            assignedStaffIds = typeof j.assigned_staff_ids === 'string' ? JSON.parse(j.assigned_staff_ids) : j.assigned_staff_ids;
+          } catch {
+            assignedStaffIds = [];
+          }
+        }
         durationHours = parseFloat(j.duration_hours || 1.5);
         jobDetails = {
           title: j.title,
@@ -425,6 +445,11 @@ const submitPublicBooking = async (req, res, next) => {
           property_address: j.property_address,
         };
       }
+    }
+
+    if (!Array.isArray(assignedStaffIds)) assignedStaffIds = [];
+    if (assignedStaffIds.length === 0 && assignedStaffId) {
+      assignedStaffIds = [assignedStaffId];
     }
 
     if (!workOrderId) {
@@ -443,17 +468,40 @@ const submitPublicBooking = async (req, res, next) => {
       if (!isNaN(parsedId)) assignedStaffId = parsedId;
     }
 
-    // Strict Assigned Contractor Enforcement: A contractor must already be assigned by office admin
+    // If still no specific staff chosen, resolve from eligible candidates
+    if (!assignedStaffId) {
+      let candidateIds = assignedStaffIds;
+      if (candidateIds.length === 0) {
+        // Open to any active maintenance contractor
+        const [allStaff] = await connection.query(
+          `SELECT sp.id FROM staff_profiles sp JOIN users u ON sp.user_id = u.id WHERE u.role = 'MAINTENANCE_STAFF' AND (u.is_active = 1 OR u.is_active IS NULL)`
+        );
+        candidateIds = allStaff.map(s => s.id);
+      }
+
+      // Find the first candidate who has this slot free
+      for (const cId of candidateIds) {
+        const avail = await calculateStaffAvailableSlots(cId, dateVal, durationHours, connection);
+        const free = avail.availableSlots?.some(s =>
+          s.timeSlot === slotVal || s.startTime === slotVal || (s.startTime && slotVal.startsWith(s.startTime))
+        );
+        if (free) {
+          assignedStaffId = cId;
+          break;
+        }
+      }
+    }
+
     if (!assignedStaffId) {
       await connection.rollback();
       connection.release();
       return res.status(400).json({
         success: false,
-        message: 'Booking Rejected: A contractor has not been assigned to this job yet. Please contact our office: 0121 769 1767.',
+        message: `Booking Rejected: No available contractor found for slot '${slotVal}' on ${dateVal}. Please choose another slot.`,
       });
     }
 
-    // Validate Slot Availability & Overlapping Booking Prevention
+    // Validate Slot Availability for assigned staff
     const availabilityResult = await calculateStaffAvailableSlots(assignedStaffId, dateVal, durationHours, connection);
     const isSlotValid = availabilityResult.availableSlots?.some(s => 
       s.timeSlot === slotVal || 
@@ -478,13 +526,14 @@ const submitPublicBooking = async (req, res, next) => {
     }
 
     // Update work_orders scheduled date/time, assigned staff, and move stage to 'Jobs'
-    const assignedJson = assignedStaffId ? JSON.stringify([assignedStaffId]) : null;
+    const finalStaffIds = (requiresMultiple && assignedStaffIds.length > 1) ? assignedStaffIds : [assignedStaffId];
+    const assignedJson = JSON.stringify(finalStaffIds);
     await connection.query(
       `UPDATE work_orders SET 
         scheduled_date = ?,
         scheduled_time_slot = ?,
-        assigned_staff_id = COALESCE(?, assigned_staff_id),
-        assigned_staff_ids = COALESCE(?, assigned_staff_ids),
+        assigned_staff_id = ?,
+        assigned_staff_ids = ?,
         pipeline_stage = 'Jobs'
        WHERE id = ?`,
       [dateVal, slotVal, assignedStaffId, assignedJson, workOrderId]

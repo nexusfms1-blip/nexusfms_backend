@@ -219,7 +219,9 @@ const getPublicBookingAvailableSlots = async (req, res, next) => {
 
     // 1. Resolve Work Order & Assigned / Preferred Technician from Token
     const [bookingRows] = await pool.query(
-      `SELECT b.id as request_id, b.work_order_id, b.earliest_date, b.assignment_preference_staff_id, w.assigned_staff_id, w.duration_hours, w.title, w.description, w.resident_name, w.property_address
+      `SELECT b.id as request_id, b.work_order_id, b.earliest_date, b.assignment_preference_staff_id,
+              w.assigned_staff_id, w.assigned_staff_ids, w.requires_multiple_contractors,
+              w.duration_hours, w.title, w.description, w.resident_name, w.property_address
        FROM booking_requests b
        JOIN work_orders w ON b.work_order_id = w.id
        WHERE b.secure_token = ?`,
@@ -228,6 +230,8 @@ const getPublicBookingAvailableSlots = async (req, res, next) => {
 
     let workOrderId = null;
     let staffProfileId = null;
+    let assignedStaffIds = [];
+    let requiresMultiple = false;
     let durationHours = 1.5;
     let jobDetails = {};
     let earliestDateVal = null;
@@ -236,6 +240,14 @@ const getPublicBookingAvailableSlots = async (req, res, next) => {
       const b = bookingRows[0];
       workOrderId = b.work_order_id;
       staffProfileId = b.assigned_staff_id || b.assignment_preference_staff_id;
+      requiresMultiple = Boolean(b.requires_multiple_contractors);
+      if (b.assigned_staff_ids) {
+        try {
+          assignedStaffIds = typeof b.assigned_staff_ids === 'string' ? JSON.parse(b.assigned_staff_ids) : b.assigned_staff_ids;
+        } catch {
+          assignedStaffIds = [];
+        }
+      }
       durationHours = parseFloat(b.duration_hours || 1.5);
       earliestDateVal = b.earliest_date;
       jobDetails = {
@@ -246,13 +258,21 @@ const getPublicBookingAvailableSlots = async (req, res, next) => {
       };
     } else {
       const [jobRows] = await pool.query(
-        'SELECT id, assigned_staff_id, duration_hours, title, description, property_address, resident_name FROM work_orders WHERE secure_token = ?',
+        'SELECT id, assigned_staff_id, assigned_staff_ids, requires_multiple_contractors, duration_hours, title, description, property_address, resident_name FROM work_orders WHERE secure_token = ?',
         [token]
       );
       if (jobRows.length > 0) {
         const j = jobRows[0];
         workOrderId = j.id;
         staffProfileId = j.assigned_staff_id;
+        requiresMultiple = Boolean(j.requires_multiple_contractors);
+        if (j.assigned_staff_ids) {
+          try {
+            assignedStaffIds = typeof j.assigned_staff_ids === 'string' ? JSON.parse(j.assigned_staff_ids) : j.assigned_staff_ids;
+          } catch {
+            assignedStaffIds = [];
+          }
+        }
         durationHours = parseFloat(j.duration_hours || 1.5);
         jobDetails = {
           title: j.title,
@@ -261,6 +281,11 @@ const getPublicBookingAvailableSlots = async (req, res, next) => {
           resident_name: j.resident_name,
         };
       }
+    }
+
+    if (!Array.isArray(assignedStaffIds)) assignedStaffIds = [];
+    if (assignedStaffIds.length === 0 && staffProfileId) {
+      assignedStaffIds = [staffProfileId];
     }
 
     if (!workOrderId) {
@@ -296,24 +321,121 @@ const getPublicBookingAvailableSlots = async (req, res, next) => {
       });
     }
 
-    // 2. Calculate Available Slots for the Assigned/Eligible Technician(s)
+    // 2. Calculate Available Slots based on the 4 Rules:
+    // Rule 1: If no contractor is selected (assignedStaffIds empty), ANY contractor can be chosen.
+    // Rule 2: If 1 contractor is chosen, tenant can only book on this calendar.
+    // Rule 3: If 2+ contractors chosen & NOT requiresMultiple, tenant can book any of the selected contractors individually.
+    // Rule 4: If requiresMultiple is true, only overlapping slots where ALL selected contractors are available can be booked.
+
+    let targetCandidateStaffIds = [];
+    if (assignedStaffIds.length === 0) {
+      // Case 1: Open to any contractor - fetch all active maintenance staff
+      const [allStaff] = await pool.query(
+        `SELECT sp.id, u.full_name FROM staff_profiles sp JOIN users u ON sp.user_id = u.id WHERE u.role = 'MAINTENANCE_STAFF' AND (u.is_active = 1 OR u.is_active IS NULL)`
+      );
+      targetCandidateStaffIds = allStaff.map((s) => s.id);
+    } else {
+      targetCandidateStaffIds = assignedStaffIds;
+    }
+
     let availabilityResult;
-    if (staffProfileId) {
-      availabilityResult = await calculateStaffAvailableSlots(staffProfileId, date, durationHours);
+    if (targetCandidateStaffIds.length === 0) {
+      availabilityResult = {
+        success: false,
+        reason: 'No active contractors are currently available in the system.',
+        message: 'No active contractors are currently available in the system.',
+        availableSlots: [],
+      };
+    } else if (requiresMultiple && targetCandidateStaffIds.length > 1) {
+      // Rule 4: Team Job - Must find overlapping slots where ALL selected contractors are free
+      const staffSlotsMap = [];
+      for (const sId of targetCandidateStaffIds) {
+        const resForStaff = await calculateStaffAvailableSlots(sId, date, durationHours);
+        staffSlotsMap.push(resForStaff.availableSlots || []);
+      }
+
+      // Intersection of time slots
+      const firstStaffSlots = staffSlotsMap[0] || [];
+      const commonSlots = firstStaffSlots
+        .filter((s1) => {
+          return staffSlotsMap.slice(1).every((otherList) =>
+            otherList.some((s2) => s2.timeSlot === s1.timeSlot || s2.startTime === s1.startTime)
+          );
+        })
+        .map((slot) => ({
+          ...slot,
+          assignedStaffId: targetCandidateStaffIds[0],
+          assignedStaffIds: targetCandidateStaffIds,
+          isTeamJob: true,
+        }));
+
+      availabilityResult = {
+        success: true,
+        targetDate: date,
+        availableSlots: commonSlots,
+        isTeamJob: true,
+        reason:
+          commonSlots.length === 0
+            ? 'All required team contractors are not simultaneously free on this date. Please select another date.'
+            : undefined,
+        message:
+          commonSlots.length === 0
+            ? 'All required team contractors are not simultaneously free on this date. Please select another date.'
+            : undefined,
+      };
+    } else if (targetCandidateStaffIds.length === 1) {
+      // Rule 2: Exactly 1 contractor chosen
+      availabilityResult = await calculateStaffAvailableSlots(targetCandidateStaffIds[0], date, durationHours);
+      if (availabilityResult.availableSlots) {
+        availabilityResult.availableSlots = availabilityResult.availableSlots.map((s) => ({
+          ...s,
+          assignedStaffId: targetCandidateStaffIds[0],
+        }));
+      }
       if (!availabilityResult.availableSlots || availabilityResult.availableSlots.length === 0) {
         availabilityResult = {
           success: false,
           reason: 'Your allocated technician is not available on this date. Please select another date.',
           message: 'Your allocated technician is not available on this date. Please select another date.',
-          availableSlots: []
+          availableSlots: [],
         };
       }
     } else {
+      // Rule 1 & Rule 3: Multiple eligible contractors (or all contractors) - individual booking
+      const mergedSlots = [];
+      const seenTimeKeys = new Set();
+
+      for (const sId of targetCandidateStaffIds) {
+        const resForStaff = await calculateStaffAvailableSlots(sId, date, durationHours);
+        const slots = resForStaff.availableSlots || [];
+        for (const slot of slots) {
+          const key = slot.timeSlot || slot.startTime;
+          // Keep unique slot with the technician who is available for it
+          if (!seenTimeKeys.has(key)) {
+            seenTimeKeys.add(key);
+            mergedSlots.push({
+              ...slot,
+              assignedStaffId: sId,
+            });
+          }
+        }
+      }
+
+      // Sort chronologically by start time
+      mergedSlots.sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
+
       availabilityResult = {
-        success: false,
-        reason: 'A contractor has not yet been allocated to this job. Please contact our office: 0121 769 1767.',
-        message: 'A contractor has not yet been allocated to this job. Please contact our office: 0121 769 1767.',
-        availableSlots: []
+        success: true,
+        targetDate: date,
+        availableSlots: mergedSlots,
+        reason:
+          mergedSlots.length === 0
+            ? 'No selected contractors are available on this date. Please choose another date.'
+            : undefined,
+        message:
+          mergedSlots.length === 0
+            ? 'No selected contractors are available on this date. Please choose another date.'
+            : undefined,
       };
     }
 
