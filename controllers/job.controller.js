@@ -132,6 +132,9 @@ const formatJobRow = (r, role) => {
     scheduledTimeSlot: r.scheduled_time_slot || r.booked_time_slot || r.time_slot || null,
     secureToken: r.secure_token,
     createdAt: formatDateToISO(r.created_at),
+    createdAtRaw: r.created_at || null,
+    updatedAt: formatDateToISO(r.updated_at),
+    updatedAtRaw: r.updated_at || null,
     bookingStatus: r.booking_status || null,
     
     // Cancellation Properties
@@ -524,16 +527,7 @@ const moveJobStage = async (req, res, next) => {
       }
     }
 
-    // MANDATORY CONTRACTOR TICK/ASSIGNMENT RULE:
-    // A contractor MUST be assigned before moving to Jobs Waiting Booking (prevents random auto-assignment)
-    if (normalizedStage === 'Jobs Waiting Booking' || normalizedStage === 'Jobs Awaiting Booking' || normalizedStage === 'Waiting Job Booking') {
-      if (!existing[0].assigned_staff_id) {
-        return res.status(400).json({
-          success: false,
-          message: 'Validation Error: A contractor must be ticked/assigned before moving this job to Jobs Waiting Booking.',
-        });
-      }
-    }
+
 
     try {
       await pool.query('UPDATE work_orders SET pipeline_stage = ? WHERE id = ?', [normalizedStage, id]);
@@ -559,19 +553,29 @@ const moveJobStage = async (req, res, next) => {
       console.log(`[moveJobStage] Work order #${id} moved to Completed Quotes. Waiting for manager approval (no booking link sent).`);
     }
 
-    // Jobs Waiting Booking: Manager has approved quote! Now trigger booking request SMS to resident.
-    if ((normalizedStage === 'Jobs Waiting Booking' || normalizedStage === 'Jobs Awaiting Booking' || normalizedStage === 'Waiting Job Booking') && existing[0].pipeline_stage !== normalizedStage) {
-      const [existingBooking] = await pool.query(
-        'SELECT id, status FROM booking_requests WHERE work_order_id = ?',
+    // Jobs Waiting Booking: Clear scheduled date & slot from calendar, cancel old active booking request, and trigger fresh SMS rebook link to tenant!
+    if (normalizedStage === 'Jobs Waiting Booking' || normalizedStage === 'Jobs Awaiting Booking' || normalizedStage === 'Waiting Job Booking') {
+      // 1. Clear appointment date and time from calendar
+      await pool.query(
+        `UPDATE work_orders SET 
+          previous_appointment_date = IFNULL(scheduled_date, previous_appointment_date),
+          previous_appointment_time = IFNULL(scheduled_time_slot, previous_appointment_time),
+          scheduled_date = NULL,
+          scheduled_time_slot = NULL
+         WHERE id = ?`,
         [id]
       );
-      if (existingBooking.length === 0 || existingBooking[0].status === 'EXPIRED') {
-        await BookingRequestService.triggerAutoBookingRequest(id).catch(err => {
-          console.error('[moveJobStage] Error triggering auto booking request on Jobs Waiting Booking:', err.message);
-        });
-      } else {
-        console.log(`[moveJobStage] Booking request already exists for work order #${id} (status: ${existingBooking[0].status}), skipping duplicate trigger.`);
-      }
+
+      // 2. Cancel old active booking requests so a fresh one is always created
+      await pool.query(
+        `UPDATE booking_requests SET status = 'CANCELLED' WHERE work_order_id = ? AND status = 'WAITING_FOR_BOOKING'`,
+        [id]
+      );
+
+      // 3. Trigger fresh booking request SMS to tenant
+      await BookingRequestService.triggerAutoBookingRequest(id).catch(err => {
+        console.error('[moveJobStage] Error triggering auto booking request on Jobs Waiting Booking:', err.message);
+      });
 
       // Notify Property Manager that quote was approved and booking link sent to tenant
       try {
@@ -1878,7 +1882,135 @@ const sendQuoteToManager = async (req, res, next) => {
   }
 };
 
+
+// @desc    Send automated reminder to assigned contractor for missing photos / completion report
+// @route   POST /api/v1/jobs/:id/remind-contractor
+// @access  Private (Office Admin & Office Team)
+const remindContractorPhotosReport = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const [woRows] = await pool.query(
+      `SELECT w.id, w.job_number, w.title, w.property_address, w.resident_name, w.assigned_staff_id, 
+              w.assigned_staff_ids, w.pipeline_stage, w.contractor_reminder_count
+       FROM work_orders w
+       WHERE w.id = ?`,
+      [id]
+    );
+
+    if (woRows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Work order not found.' });
+    }
+
+    const wo = woRows[0];
+
+    // Collect all assigned contractor staff profile IDs
+    const staffProfileIds = new Set();
+    if (wo.assigned_staff_id) staffProfileIds.add(Number(wo.assigned_staff_id));
+    if (wo.assigned_staff_ids) {
+      const parsed = typeof wo.assigned_staff_ids === 'string' ? JSON.parse(wo.assigned_staff_ids) : wo.assigned_staff_ids;
+      if (Array.isArray(parsed)) parsed.forEach(sid => staffProfileIds.add(Number(sid)));
+    }
+
+    if (staffProfileIds.size === 0) {
+      return res.status(400).json({ success: false, message: 'No contractor is assigned to this job.' });
+    }
+
+    // Check if after-photos already exist
+    const [mediaRows] = await pool.query(
+      `SELECT COUNT(*) as count FROM staff_completion_media WHERE work_order_id = ?`,
+      [id]
+    );
+    const hasMedia = mediaRows[0]?.count > 0;
+
+    // Check if completion report exists
+    const [compRows] = await pool.query(
+      `SELECT work_report_summary FROM staff_job_completions WHERE work_order_id = ?`,
+      [id]
+    );
+    const hasReport = compRows[0]?.work_report_summary && compRows[0].work_report_summary.trim().length > 0;
+
+    if (hasMedia && hasReport) {
+      await pool.query('UPDATE work_orders SET contractor_reminder_active = 0 WHERE id = ?', [id]);
+      return res.status(400).json({ success: false, message: 'Contractor has already uploaded photos and submitted the report for this job. No reminder needed.' });
+    }
+
+    // Fetch contractor contact details from users & staff_profiles
+    const staffArr = Array.from(staffProfileIds);
+    const [contractors] = await pool.query(
+      `SELECT sp.id as profile_id, u.id as user_id, u.full_name, u.email, u.phone, u.role
+       FROM staff_profiles sp
+       JOIN users u ON sp.user_id = u.id
+       WHERE sp.id IN (?)`,
+      [staffArr]
+    );
+
+    if (contractors.length === 0) {
+      return res.status(400).json({ success: false, message: 'Assigned contractor profile details not found.' });
+    }
+
+    const dispatcher = require('../services/notification.service');
+    let sentCount = 0;
+
+    const jNum = wo.job_number || `#${id}`;
+    const pAddr = wo.property_address || '';
+    const missingDesc = !hasMedia && !hasReport ? 'proof photos & work completion report' : !hasMedia ? 'completion proof photos' : 'work completion report';
+
+    for (const c of contractors) {
+      const msg = `Nexus FMS Reminder: Hi ${c.full_name}, please upload your ${missingDesc} for Job ${jNum} (${pAddr}). Please update via your Shift Calendar portal as soon as possible.`;
+
+      if (c.phone) {
+        await dispatcher.dispatch({
+          recipientUserId: c.user_id,
+          recipientRole: 'MAINTENANCE_STAFF',
+          type: 'CONTRACTOR_PHOTO_REMINDER',
+          title: `Reminder: Upload Photos/Report for Job ${jNum}`,
+          messageTemplate: msg,
+          structuredData: { job_number: jNum, address: pAddr },
+          channels: ['SMS', 'IN_APP'],
+          contactPhone: c.phone,
+          actionUrl: '/maintenance/calendar',
+        }).catch(e => console.warn(`[remindContractor] Failed to notify ${c.full_name}:`, e.message));
+        sentCount++;
+      } else {
+        await dispatcher.dispatch({
+          recipientUserId: c.user_id,
+          recipientRole: 'MAINTENANCE_STAFF',
+          type: 'CONTRACTOR_PHOTO_REMINDER',
+          title: `Reminder: Upload Photos/Report for Job ${jNum}`,
+          messageTemplate: msg,
+          structuredData: { job_number: jNum, address: pAddr },
+          channels: ['IN_APP'],
+          actionUrl: '/maintenance/calendar',
+        }).catch(e => console.warn(`[remindContractor] In-app notification error:`, e.message));
+        sentCount++;
+      }
+    }
+
+    // Update work_orders reminder tracking
+    await pool.query(
+      `UPDATE work_orders SET 
+        contractor_reminder_active = 1,
+        last_contractor_reminder_at = NOW(),
+        contractor_reminder_count = IFNULL(contractor_reminder_count, 0) + 1
+       WHERE id = ?`,
+      [id]
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: `Reminder sent to ${contractors.map(c => c.full_name).join(', ')} via SMS and daily reminder active.`,
+      data: {
+        remindedContractors: contractors.map(c => ({ name: c.full_name, phone: c.phone })),
+        reminderCount: (wo.contractor_reminder_count || 0) + 1,
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
+  remindContractorPhotosReport,
   getJobs,
   getJobById,
   createJob,

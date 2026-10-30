@@ -73,7 +73,11 @@ const runAutoMigrations = async () => {
       { name: 'work_order_reference', ddl: "ALTER TABLE work_orders ADD COLUMN work_order_reference VARCHAR(100) DEFAULT NULL" },
       { name: 'tenant_contacted_at', ddl: "ALTER TABLE work_orders ADD COLUMN tenant_contacted_at DATETIME DEFAULT NULL" },
       { name: 'pm_no_reply_escalated_at', ddl: "ALTER TABLE work_orders ADD COLUMN pm_no_reply_escalated_at DATETIME DEFAULT NULL" },
-      { name: 'manager_ack_email_sent_at', ddl: "ALTER TABLE work_orders ADD COLUMN manager_ack_email_sent_at DATETIME DEFAULT NULL" }
+      { name: 'manager_ack_email_sent_at', ddl: "ALTER TABLE work_orders ADD COLUMN manager_ack_email_sent_at DATETIME DEFAULT NULL" },
+      // Contractor daily photo/report reminder tracking
+      { name: 'contractor_reminder_active', ddl: "ALTER TABLE work_orders ADD COLUMN contractor_reminder_active TINYINT(1) NOT NULL DEFAULT 0" },
+      { name: 'last_contractor_reminder_at', ddl: "ALTER TABLE work_orders ADD COLUMN last_contractor_reminder_at DATETIME DEFAULT NULL" },
+      { name: 'contractor_reminder_count', ddl: "ALTER TABLE work_orders ADD COLUMN contractor_reminder_count INT NOT NULL DEFAULT 0" }
     ];
 
     for (const col of optionalColumns) {

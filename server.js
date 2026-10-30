@@ -129,4 +129,6 @@ app.listen(PORT, async () => {
   initScheduler();
   initBookingScheduler();
   initTenantNoReplyScheduler();
+  const { initContractorPhotoReminderScheduler } = require('./scheduler/contractorPhotoReminderJob');
+  initContractorPhotoReminderScheduler();
 });

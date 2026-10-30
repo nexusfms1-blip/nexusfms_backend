@@ -11,6 +11,7 @@ const {
   getAssignmentHistory,
   resendQuoteRequest,
   sendQuoteToManager,
+  remindContractorPhotosReport,
 } = require('../controllers/job.controller');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth.middleware');
 
@@ -34,6 +35,9 @@ router.post('/:id/resend-quote-request', authorizeRoles('OFFICE_ADMIN', 'OFFICE_
 
 // Send Quote to Property Manager (Office Admin & Office Team)
 router.post('/:id/send-quote-to-manager', authorizeRoles('OFFICE_ADMIN', 'OFFICE_TEAM'), sendQuoteToManager);
+
+// Remind Contractor for Photos & Report (Office Admin & Office Team)
+router.post('/:id/remind-contractor', authorizeRoles('OFFICE_ADMIN', 'OFFICE_TEAM', 'SUPER_ADMIN'), remindContractorPhotosReport);
 
 // Move Stage (Office Admin, Office Team & Maintenance Staff)
 router.put('/:id/stage', authorizeRoles('OFFICE_ADMIN', 'OFFICE_TEAM', 'MAINTENANCE_STAFF'), moveJobStage);
