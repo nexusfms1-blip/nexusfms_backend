@@ -88,7 +88,13 @@ const calculateStaffAvailableSlots = async (staffProfileId, targetDate, duration
   const isFullDayBlocked = Array.isArray(unavail) && unavail.some(item => {
     if (typeof item === 'string') return item === targetDate;
     if (typeof item === 'object' && item !== null) {
-      return item.date === targetDate && (!item.startTime || item.isFullDay);
+      const isFull = Boolean(item.isFullDay || !item.startTime);
+      if (isFull) {
+        if (item.endDate && item.date) {
+          return targetDate >= item.date && targetDate <= item.endDate;
+        }
+        return item.date === targetDate;
+      }
     }
     return false;
   });
@@ -308,7 +314,16 @@ const calculateMultiStaffAvailableSlots = async (
     if (typeof unavail === 'string') {
       try { unavail = JSON.parse(unavail); } catch { unavail = []; }
     }
-    const isDateUnavailable = Array.isArray(unavail) && unavail.includes(targetDate);
+    const isDateUnavailable = Array.isArray(unavail) && unavail.some(item => {
+      if (typeof item === 'string') return item === targetDate;
+      if (typeof item === 'object' && item !== null) {
+        if (item.endDate && item.date) {
+          return targetDate >= item.date && targetDate <= item.endDate && (!item.startTime || item.isFullDay);
+        }
+        return item.date === targetDate && (!item.startTime || item.isFullDay);
+      }
+      return false;
+    });
     const isOffDutyOrLeave = staff.duty_status === 'ON_LEAVE' || staff.duty_status === 'OFF_DUTY';
 
     const isPreferred = cleanPrefId && (staff.id === cleanPrefId || staff.user_id === cleanPrefId);
