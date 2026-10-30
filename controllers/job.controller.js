@@ -1052,7 +1052,7 @@ const updateJobStatus = async (req, res, next) => {
             technicianName: prevStaff.full_name,
             technicianPhone: prevStaff.phone,
             propertyAddress: existingJob.property_address,
-            channels: ['IN_APP', 'SMS', 'EMAIL'],
+            channels: ['IN_APP', 'EMAIL'],
           });
 
           const reassignedPayload = {
@@ -1078,6 +1078,8 @@ const updateJobStatus = async (req, res, next) => {
             contactEmail: prevStaff.email,
             message: reassignedMsg,
             reassignedBy: req.user?.full_name || 'Office Admin',
+            skipSms: true,
+            sendSms: false,
             actionUrl: `${frontendBase}/maintenance/my-tasks`,
           };
 
@@ -1113,7 +1115,7 @@ const updateJobStatus = async (req, res, next) => {
             technicianName: staff.full_name,
             technicianPhone: staff.staff_phone || staff.user_phone,
             propertyAddress: existingJob.property_address,
-            channels: ['IN_APP', 'SMS', 'EMAIL'],
+            channels: ['IN_APP', 'EMAIL'],
             skipWebhook: true,
           });
 
@@ -1152,6 +1154,8 @@ const updateJobStatus = async (req, res, next) => {
             contactPhone: staff.staff_phone || staff.user_phone,
             contactEmail: staff.email,
             assignmentType: (prevStaffId !== null && prevStaffId !== undefined) ? 'REASSIGNMENT' : 'MANUAL_ADMIN',
+            skipSms: true,
+            sendSms: false,
             actionUrl: directJobActionUrl,
           };
 
@@ -1204,11 +1208,13 @@ const updateJobStatus = async (req, res, next) => {
           technicianName: staff.full_name,
           technicianPhone: staff.phone,
           propertyAddress: existingJob.property_address,
-          channels: ['IN_APP', 'SMS', 'EMAIL'],
+          channels: ['IN_APP', 'EMAIL'],
           skipWebhook: true,
         });
 
         dispatchN8NWebhook('TASK_SCHEDULE_CHANGED', {
+          skipSms: true,
+          sendSms: false,
           event: 'TASK_SCHEDULE_CHANGED',
           type: 'TASK_SCHEDULE_CHANGED',
           entityId: id,
