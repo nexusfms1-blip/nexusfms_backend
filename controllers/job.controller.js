@@ -317,6 +317,7 @@ const getJobs = async (req, res, next) => {
     const jobs = rows.map(r => {
       const formatted = formatJobRow(r, req.user ? req.user.role : null);
       formatted.completionPhotos = mediaByJob[r.id] || [];
+      formatted.completionPhotosCount = (mediaByJob[r.id] || []).length;
       formatted.completionReport = reportByJob[r.id] || null;
       formatted.customerPhotos = customerMediaByJob[r.id] || [];
       formatted.customerPhotosCount = (customerMediaByJob[r.id] || []).length;
@@ -430,6 +431,7 @@ const getJobById = async (req, res, next) => {
 
     const formatted = formatJobRow(rows[0], req.user ? req.user.role : null);
     formatted.completionPhotos = completionPhotos;
+    formatted.completionPhotosCount = completionPhotos.length;
     formatted.completionReport = completionReport;
     formatted.customerPhotos = customerPhotos;
     formatted.customerPhotosCount = customerPhotos.length;
