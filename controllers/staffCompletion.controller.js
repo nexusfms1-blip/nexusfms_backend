@@ -375,22 +375,26 @@ const uploadCompletionPhotos = async (req, res, next) => {
       });
     }
 
-    const targetStaffId = staffProfileId || job.assigned_staff_id;
+    const targetStaffId = staffProfileId || job.assigned_staff_id || null;
 
-    // Ensure staff_job_completions record exists to link completion_id
+    // Ensure staff_job_completions record exists if staff is assigned
     const [existingReport] = await pool.query('SELECT id FROM staff_job_completions WHERE work_order_id = ?', [id]);
     let completionId = null;
 
     if (existingReport.length > 0) {
       completionId = existingReport[0].id;
-    } else {
-      const [insertRes] = await pool.query(
-        `INSERT INTO staff_job_completions 
-          (work_order_id, staff_id, work_report_summary, completion_status, completed_at)
-         VALUES (?, ?, ?, ?, NOW())`,
-        [id, targetStaffId, 'Initial photo upload', 'IN_PROGRESS']
-      );
-      completionId = insertRes.insertId;
+    } else if (targetStaffId) {
+      try {
+        const [insertRes] = await pool.query(
+          `INSERT INTO staff_job_completions 
+            (work_order_id, staff_id, work_report_summary, completion_status, completed_at)
+           VALUES (?, ?, ?, 'COMPLETED', NOW())`,
+          [id, targetStaffId, 'Photo upload']
+        );
+        completionId = insertRes.insertId;
+      } catch (err) {
+        console.warn('[uploadCompletionPhotos] staff_job_completions insert skipped:', err.message);
+      }
     }
 
     const savedPhotos = [];
@@ -398,15 +402,31 @@ const uploadCompletionPhotos = async (req, res, next) => {
     for (const file of files) {
       const uploadRes = await uploadMediaFile(file, 'completion');
       const fileUrl = uploadRes?.url || `/uploads/${file.filename}`;
-      const [mediaRes] = await pool.query(
-        `INSERT INTO staff_completion_media 
-          (completion_id, work_order_id, file_name, file_path, file_size_bytes, mime_type)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [completionId, id, file.originalname, fileUrl, file.size, file.mimetype]
+
+      // 1. Always insert into customer_media_uploads so photos are allocated across any pipeline section
+      const [cmuRes] = await pool.query(
+        `INSERT INTO customer_media_uploads 
+          (work_order_id, media_type, file_name, file_path, file_size_bytes, mime_type)
+         VALUES (?, 'PHOTO', ?, ?, ?, ?)`,
+        [id, file.originalname, fileUrl, file.size, file.mimetype]
       );
 
+      // 2. Also link into staff_completion_media if completionId exists
+      if (completionId) {
+        try {
+          await pool.query(
+            `INSERT INTO staff_completion_media 
+              (completion_id, work_order_id, file_name, file_path, file_size_bytes, mime_type)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [completionId, id, file.originalname, fileUrl, file.size, file.mimetype]
+          );
+        } catch (err) {
+          console.warn('[uploadCompletionPhotos] staff_completion_media insert skipped:', err.message);
+        }
+      }
+
       savedPhotos.push({
-        id: mediaRes.insertId,
+        id: cmuRes.insertId,
         fileName: file.originalname,
         filePath: fileUrl,
         fileSize: file.size,
@@ -416,7 +436,8 @@ const uploadCompletionPhotos = async (req, res, next) => {
 
     res.status(200).json({
       success: true,
-      message: 'Completion proof photos uploaded successfully.',
+      message: 'Work order photos uploaded successfully.',
+      count: savedPhotos.length,
       data: {
         workOrderId: id,
         completionId,
