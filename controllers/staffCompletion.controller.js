@@ -31,36 +31,61 @@ const formatMediaUrl = (url) => {
 };
 
 // Helper to format raw database row to Frontend job object
-const formatJobRow = (r, mediaList = []) => ({
-  id: r.id,
-  jobNumber: r.job_number,
-  section: r.pipeline_stage,
-  title: r.title,
-  tenantId: r.resident_id || null,
-  tenantName: r.live_resident_name || r.resident_name,
-  contactPhone: r.live_contact_phone || r.contact_phone,
-  contactEmail: r.live_contact_email || r.contact_email || '',
-  address: r.live_property_address || r.property_address,
-  description: r.description || '',
-  durationHours: parseFloat(r.duration_hours || 1.5),
-  assignedStaffId: r.assigned_staff_id || null,
-  assignedStaffIds: r.assigned_staff_ids ? (typeof r.assigned_staff_ids === 'string' ? JSON.parse(r.assigned_staff_ids) : r.assigned_staff_ids) : [],
-  assignedStaffCode: r.staff_code || (r.assigned_staff_id ? `STF-${100 + r.assigned_staff_id}` : null),
-  assignedStaffName: r.staff_name || null,
-  assignedStaffColor: r.staff_color || '#009bf2',
-  scheduledDate: r.scheduled_date ? String(r.scheduled_date).substring(0, 10) : null,
-  scheduledTimeSlot: r.scheduled_time_slot || null,
-  secureToken: r.secure_token,
-  createdAt: r.created_at ? String(r.created_at).substring(0, 10) : null,
-  residentPhotos: mediaList.map(m => ({
-    id: m.id,
-    fileName: m.file_name,
-    filePath: formatMediaUrl(m.file_path),
-    mediaType: m.media_type || 'PHOTO',
-    createdAt: m.created_at
-  })),
-  photoUrls: mediaList.map(m => formatMediaUrl(m.file_path))
-});
+const formatJobRow = (r, mediaList = [], staffMap = {}, currentStaffId = null) => {
+  const assignedIds = r.assigned_staff_ids 
+    ? (typeof r.assigned_staff_ids === 'string' ? JSON.parse(r.assigned_staff_ids) : r.assigned_staff_ids) 
+    : (r.assigned_staff_id ? [r.assigned_staff_id] : []);
+
+  const cleanNum = (v) => Number(String(v ?? '').replace(/^(stf-|usr-)/, ''));
+
+  const coContractors = assignedIds
+    .filter(id => cleanNum(id) !== cleanNum(currentStaffId))
+    .map(id => staffMap[cleanNum(id)] ? {
+      id: cleanNum(id),
+      name: staffMap[cleanNum(id)].name,
+      phone: staffMap[cleanNum(id)].phone,
+      staffCode: staffMap[cleanNum(id)].staff_code
+    } : null)
+    .filter(Boolean);
+
+  const allAssignedNames = assignedIds
+    .map(id => staffMap[cleanNum(id)]?.name || (cleanNum(id) === cleanNum(r.assigned_staff_id) ? r.staff_name : null))
+    .filter(Boolean);
+
+  return {
+    id: r.id,
+    jobNumber: r.job_number,
+    section: r.pipeline_stage,
+    title: r.title,
+    tenantId: r.resident_id || null,
+    tenantName: r.live_resident_name || r.resident_name,
+    contactPhone: r.live_contact_phone || r.contact_phone,
+    contactEmail: r.live_contact_email || r.contact_email || '',
+    address: r.live_property_address || r.property_address,
+    description: r.description || '',
+    durationHours: parseFloat(r.duration_hours || 1.5),
+    assignedStaffId: r.assigned_staff_id || null,
+    assignedStaffIds: assignedIds,
+    assignedStaffCode: r.staff_code || (r.assigned_staff_id ? `STF-${100 + r.assigned_staff_id}` : null),
+    assignedStaffName: r.staff_name || null,
+    assignedStaffNames: allAssignedNames.length > 0 ? allAssignedNames : (r.staff_name ? [r.staff_name] : []),
+    assignedStaffColor: r.staff_color || '#009bf2',
+    isTeamJob: Boolean(r.requires_multiple_contractors || assignedIds.length > 1),
+    coContractors: coContractors,
+    scheduledDate: r.scheduled_date ? String(r.scheduled_date).substring(0, 10) : null,
+    scheduledTimeSlot: r.scheduled_time_slot || null,
+    secureToken: r.secure_token,
+    createdAt: r.created_at ? String(r.created_at).substring(0, 10) : null,
+    residentPhotos: mediaList.map(m => ({
+      id: m.id,
+      fileName: m.file_name,
+      filePath: formatMediaUrl(m.file_path),
+      mediaType: m.media_type || 'PHOTO',
+      createdAt: m.created_at
+    })),
+    photoUrls: mediaList.map(m => formatMediaUrl(m.file_path))
+  };
+};
 
 // @desc    Get all work orders assigned to the authenticated technician
 // @route   GET /api/v1/staff/my-jobs
@@ -94,9 +119,9 @@ const getMyAssignedJobs = async (req, res, next) => {
 
     const queryParams = [];
 
-    // Office Admin views all, Staff views ONLY assigned jobs
+    // Office Admin views all, Staff views ONLY assigned jobs (including multi-contractor team jobs)
     if (req.user.role === 'MAINTENANCE_STAFF') {
-      sql += ' WHERE (w.assigned_staff_id = ? AND ? IS NOT NULL)';
+      sql += ' WHERE (w.assigned_staff_id = ? OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(? AS CHAR), "$")))';
       queryParams.push(staffProfileId, staffProfileId);
     }
 
@@ -120,7 +145,18 @@ const getMyAssignedJobs = async (req, res, next) => {
       }
     }
 
-    const jobs = rows.map(r => formatJobRow(r, mediaByJob[r.id] || []));
+    // Fetch staff lookup for multi-assigned technician names
+    const [allStaff] = await pool.query(
+      `SELECT sp.id, u.full_name as name, u.phone, sp.staff_code 
+       FROM staff_profiles sp 
+       JOIN users u ON sp.user_id = u.id`
+    );
+    const staffMap = {};
+    for (const s of allStaff) {
+      staffMap[s.id] = s;
+    }
+
+    const jobs = rows.map(r => formatJobRow(r, mediaByJob[r.id] || [], staffMap, staffProfileId));
 
     res.status(200).json({
       success: true,
@@ -189,9 +225,19 @@ const getMyAssignedJobById = async (req, res, next) => {
       [job.id]
     );
 
+    const [allStaff] = await pool.query(
+      `SELECT sp.id, u.full_name as name, u.phone, sp.staff_code 
+       FROM staff_profiles sp 
+       JOIN users u ON sp.user_id = u.id`
+    );
+    const staffMap = {};
+    for (const s of allStaff) {
+      staffMap[s.id] = s;
+    }
+
     res.status(200).json({
       success: true,
-      data: formatJobRow(job, mediaRows),
+      data: formatJobRow(job, mediaRows, staffMap, staffProfileId),
     });
   } catch (err) {
     next(err);
