@@ -125,9 +125,9 @@ const getDashboardStats = async (req, res, next) => {
         SELECT COUNT(*) AS count FROM work_orders ${staffFilter}
       `),
 
-      // 7. Category breakdown titles
+      // 7. Category breakdown titles and client emails
       pool.query(`
-        SELECT title, description FROM work_orders ${staffFilter}
+        SELECT title, description, manager_email, original_sender_email FROM work_orders ${staffFilter}
       `)
     ]);
 
@@ -234,6 +234,108 @@ const getDashboardStats = async (req, res, next) => {
       { name: 'Appliance Repair',      value: Math.round((catCounts['Appliance Repair']      / totalCat) * 100), color: '#ec4899' },
     ];
 
+    // Client Domain Breakdown (% by Client Agency/Domain)
+    const domainNameMap = {
+      'martinco.com': 'Martin & Co',
+      'jlgroup.uk': 'JL Group',
+      'burchelledwards.co.uk': 'Burchell Edwards',
+      'robertaston.com': 'Robert Aston & Co',
+      'sequencehome.co.uk': 'Sequence Home',
+      'nexusfms.com': 'Direct / Internal (Nexus)',
+      'gmail.com': 'Private Landlords (Gmail)',
+      'hotmail.co.uk': 'Private Landlords (Hotmail)',
+      'hotmail.com': 'Private Landlords (Hotmail)',
+      'yahoo.com': 'Private Landlords (Yahoo)',
+      'outlook.com': 'Private Landlords (Outlook)',
+    };
+
+    const getFriendlyClientName = (domain) => {
+      if (!domain) return 'Direct / Unspecified';
+      const clean = domain.toLowerCase().trim();
+      if (domainNameMap[clean]) return domainNameMap[clean];
+      if (clean.includes('gmail') || clean.includes('hotmail') || clean.includes('yahoo') || clean.includes('outlook')) {
+        return 'Private Landlord';
+      }
+      const parts = clean.split('.');
+      const base = parts[0];
+      return base.charAt(0).toUpperCase() + base.slice(1);
+    };
+
+    const domainCounts = {};
+    allJobsRows.forEach(j => {
+      const email = (j.manager_email || j.original_sender_email || '').toLowerCase().trim();
+      let domain = 'Direct / Unspecified';
+      if (email.includes('@')) {
+        domain = email.split('@')[1];
+      }
+      domainCounts[domain] = (domainCounts[domain] || 0) + 1;
+    });
+
+    const totalDomainJobs = allJobsRows.length || 1;
+    const sortedDomains = Object.entries(domainCounts)
+      .sort((a, b) => b[1] - a[1]);
+
+    const palette = ['#00204a', '#009bf2', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#6366f1', '#14b8a6'];
+
+    const topDomains = sortedDomains.slice(0, 6);
+    const otherCount = sortedDomains.slice(6).reduce((acc, curr) => acc + curr[1], 0);
+
+    const clientDomainBreakdown = topDomains.map(([dom, cnt], idx) => ({
+      name: getFriendlyClientName(dom),
+      domain: dom,
+      count: cnt,
+      value: Math.round((cnt / totalDomainJobs) * 100) || 1,
+      color: palette[idx % palette.length],
+    }));
+
+    if (otherCount > 0) {
+      clientDomainBreakdown.push({
+        name: 'Other Clients',
+        domain: 'other',
+        count: otherCount,
+        value: Math.round((otherCount / totalDomainJobs) * 100) || 1,
+        color: '#94a3b8',
+      });
+    }
+
+    // External Agencies Breakdown (Pure external client analysis, excluding nexusfms.com)
+    const externalDomainCounts = {};
+    let totalExternalJobs = 0;
+    allJobsRows.forEach(j => {
+      const email = (j.manager_email || j.original_sender_email || '').toLowerCase().trim();
+      let domain = '';
+      if (email.includes('@')) {
+        domain = email.split('@')[1];
+      }
+      if (domain && domain !== 'nexusfms.com') {
+        externalDomainCounts[domain] = (externalDomainCounts[domain] || 0) + 1;
+        totalExternalJobs += 1;
+      }
+    });
+
+    const sortedExternal = Object.entries(externalDomainCounts)
+      .sort((a, b) => b[1] - a[1]);
+    const externalTop = sortedExternal.slice(0, 6);
+    const externalOtherCount = sortedExternal.slice(6).reduce((acc, curr) => acc + curr[1], 0);
+
+    const externalAgencyBreakdown = externalTop.map(([dom, cnt], idx) => ({
+      name: getFriendlyClientName(dom),
+      domain: dom,
+      count: cnt,
+      value: totalExternalJobs > 0 ? Math.round((cnt / totalExternalJobs) * 100) || 1 : 0,
+      color: palette[idx % palette.length],
+    }));
+
+    if (externalOtherCount > 0) {
+      externalAgencyBreakdown.push({
+        name: 'Other Agencies',
+        domain: 'other',
+        count: externalOtherCount,
+        value: totalExternalJobs > 0 ? Math.round((externalOtherCount / totalExternalJobs) * 100) || 1 : 0,
+        color: '#94a3b8',
+      });
+    }
+
     res.status(200).json({
       success: true,
       data: {
@@ -243,6 +345,8 @@ const getDashboardStats = async (req, res, next) => {
         weeklyTrend:           daysArr,
         recentJobs,
         categoryBreakdown,
+        clientDomainBreakdown,
+        externalAgencyBreakdown,
         pendingQuoteRequests:  Number(qrCount.count),
       },
     });
