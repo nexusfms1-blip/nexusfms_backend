@@ -25,7 +25,7 @@ const getPublicRequestByToken = async (req, res, next) => {
         [token]
       ),
       pool.query(
-        `SELECT b.*, w.job_number, w.title, w.resident_name, w.property_address, w.description as job_desc, w.duration_hours, w.scheduled_date, w.scheduled_time_slot, w.assigned_staff_id, u.full_name as staff_name
+        `SELECT b.*, w.job_number, w.title, w.resident_name, w.property_address, w.description as job_desc, w.duration_hours, w.scheduled_date, w.scheduled_time_slot, w.assigned_staff_id, w.pipeline_stage, w.previous_appointment_date, w.previous_appointment_time, w.cancellation_reason, u.full_name as staff_name
          FROM booking_requests b
          JOIN work_orders w ON b.work_order_id = w.id
          LEFT JOIN staff_profiles sp ON w.assigned_staff_id = sp.id
@@ -66,12 +66,20 @@ const getPublicRequestByToken = async (req, res, next) => {
 
     if (bookingRows.length > 0) {
       const b = bookingRows[0];
-      const rawDate = b.booked_date || b.scheduled_date;
+      const isWaitingBooking = b.status === 'WAITING_FOR_BOOKING' || 
+                               b.pipeline_stage === 'Jobs Waiting Booking' || 
+                               b.pipeline_stage === 'Jobs Awaiting Booking' || 
+                               b.pipeline_stage === 'Waiting Job Booking';
+
       let finalDate = null;
-      if (rawDate) {
-        finalDate = typeof rawDate === 'string' ? rawDate.split('T')[0] : new Date(rawDate).toISOString().split('T')[0];
+      let finalSlot = null;
+      if (!isWaitingBooking) {
+        const rawDate = b.booked_date || b.scheduled_date;
+        if (rawDate) {
+          finalDate = typeof rawDate === 'string' ? rawDate.split('T')[0] : new Date(rawDate).toISOString().split('T')[0];
+        }
+        finalSlot = b.booked_time_slot || b.scheduled_time_slot || null;
       }
-      const finalSlot = b.booked_time_slot || b.scheduled_time_slot || null;
       const finalStaff = b.staff_name || 'Assigned Technician';
 
       // Smart earliest booking date calculation with automatic forward-rollover
@@ -88,6 +96,13 @@ const getPublicRequestByToken = async (req, res, next) => {
       // Auto-rollover: if candidate date is in the future, open from that date; once passed, fall back to today
       const activeEarliestDate = (candidateEarliest && candidateEarliest > todayStr) ? candidateEarliest : todayStr;
 
+      let prevApptDate = null;
+      if (b.previous_appointment_date) {
+        prevApptDate = typeof b.previous_appointment_date === 'string' 
+          ? b.previous_appointment_date.split('T')[0] 
+          : new Date(b.previous_appointment_date).toISOString().split('T')[0];
+      }
+
       return res.status(200).json({
         success: true,
         type: 'BOOKING',
@@ -103,7 +118,11 @@ const getPublicRequestByToken = async (req, res, next) => {
           durationHours: parseFloat(b.duration_hours || 1.5),
           selectedDate: finalDate,
           selectedTimeSlot: finalSlot,
-          status: b.status,
+          status: isWaitingBooking ? 'WAITING_FOR_BOOKING' : b.status,
+          pipelineStage: b.pipeline_stage,
+          previousAppointmentDate: prevApptDate,
+          previousAppointmentTime: b.previous_appointment_time || null,
+          cancellationReason: b.cancellation_reason || null,
           earliestDate: activeEarliestDate,
           bookingDetails: {
             date: finalDate,
@@ -118,11 +137,24 @@ const getPublicRequestByToken = async (req, res, next) => {
 
     if (jobRows.length > 0) {
       const j = jobRows[0];
-      const rawDate = j.scheduled_date;
+      const isWaitingBooking = j.pipeline_stage === 'Jobs Waiting Booking' || 
+                               j.pipeline_stage === 'Jobs Awaiting Booking' || 
+                               j.pipeline_stage === 'Waiting Job Booking';
+
       let finalDate = null;
-      if (rawDate) {
-        finalDate = typeof rawDate === 'string' ? rawDate.split('T')[0] : new Date(rawDate).toISOString().split('T')[0];
+      let finalSlot = null;
+      if (!isWaitingBooking && j.scheduled_date) {
+        finalDate = typeof j.scheduled_date === 'string' ? j.scheduled_date.split('T')[0] : new Date(j.scheduled_date).toISOString().split('T')[0];
+        finalSlot = j.scheduled_time_slot;
       }
+
+      let prevApptDate = null;
+      if (j.previous_appointment_date) {
+        prevApptDate = typeof j.previous_appointment_date === 'string' 
+          ? j.previous_appointment_date.split('T')[0] 
+          : new Date(j.previous_appointment_date).toISOString().split('T')[0];
+      }
+
       return res.status(200).json({
         success: true,
         type: 'GENERIC_PORTAL',
@@ -136,13 +168,17 @@ const getPublicRequestByToken = async (req, res, next) => {
           description: j.description,
           durationHours: parseFloat(j.duration_hours || 1.5),
           scheduledDate: finalDate,
-          scheduledTimeSlot: j.scheduled_time_slot,
+          scheduledTimeSlot: finalSlot,
+          status: isWaitingBooking ? 'WAITING_FOR_BOOKING' : j.pipeline_stage,
+          pipelineStage: j.pipeline_stage,
+          previousAppointmentDate: prevApptDate,
+          previousAppointmentTime: j.previous_appointment_time || null,
+          cancellationReason: j.cancellation_reason || null,
           bookingDetails: {
             date: finalDate,
-            timeSlot: j.scheduled_time_slot,
+            timeSlot: finalSlot,
             staffName: j.staff_name || 'Assigned Technician',
           },
-          status: j.pipeline_stage,
           secureToken: j.secure_token,
         },
       });

@@ -77,7 +77,7 @@ const formatJobRow = (r, mediaList = [], staffMap = {}, currentStaffId = null, c
     // Cancellation & Reschedule Info
     cancellationType: r.cancellation_type || null,
     cancellationReason: r.cancellation_reason || null,
-    cancelledBy: r.cancelled_by || null,
+    cancelledBy: r.cancelled_by_name || (r.cancelled_by ? `User #${r.cancelled_by}` : null),
     cancelledAt: r.cancelled_at || null,
     previousAppointmentDate: r.previous_appointment_date ? String(r.previous_appointment_date).substring(0, 10) : null,
     previousAppointmentTime: r.previous_appointment_time || null,
@@ -126,11 +126,13 @@ const getMyAssignedJobs = async (req, res, next) => {
         r.address as live_property_address,
         u.full_name as staff_name,
         sp.color_hex as staff_color,
-        sp.staff_code
+        sp.staff_code,
+        u_cb.full_name as cancelled_by_name
       FROM work_orders w
       LEFT JOIN residents r ON w.resident_id = r.id
       LEFT JOIN staff_profiles sp ON w.assigned_staff_id = sp.id
       LEFT JOIN users u ON sp.user_id = u.id
+      LEFT JOIN users u_cb ON w.cancelled_by = u_cb.id
     `;
 
     const queryParams = [];
@@ -216,11 +218,13 @@ const getMyAssignedJobById = async (req, res, next) => {
         r.address as live_property_address,
         u.full_name as staff_name,
         sp.color_hex as staff_color,
-        sp.staff_code
+        sp.staff_code,
+        u_cb.full_name as cancelled_by_name
       FROM work_orders w
       LEFT JOIN residents r ON w.resident_id = r.id
       LEFT JOIN staff_profiles sp ON w.assigned_staff_id = sp.id
       LEFT JOIN users u ON sp.user_id = u.id
+      LEFT JOIN users u_cb ON w.cancelled_by = u_cb.id
       WHERE w.id = ? OR w.job_number = ?`,
       [id, id]
     );
@@ -1118,9 +1122,9 @@ const completeJobAtomic = async (req, res, next) => {
       }
     }
 
-    // Update Work Order
+    // Update Work Order (Keep scheduled_date and scheduled_time_slot so completed job stays on the calendar)
     await connection.query(
-      "UPDATE work_orders SET pipeline_stage = 'Completed Jobs', scheduled_date = NULL, scheduled_time_slot = NULL WHERE id = ?",
+      "UPDATE work_orders SET pipeline_stage = 'Completed Jobs' WHERE id = ?",
       [id]
     );
 

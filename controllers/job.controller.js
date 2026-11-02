@@ -570,7 +570,14 @@ const moveJobStage = async (req, res, next) => {
 
       // 2. Cancel old active booking requests so a fresh one is always created
       await pool.query(
-        `UPDATE booking_requests SET status = 'CANCELLED' WHERE work_order_id = ? AND status = 'WAITING_FOR_BOOKING'`,
+        `UPDATE booking_requests SET 
+          status = 'WAITING_FOR_BOOKING',
+          booked_date = NULL,
+          booked_time_slot = NULL,
+          booked_at = NULL,
+          reminder_count = 0,
+          last_reminder_at = NULL
+         WHERE work_order_id = ?`,
         [id]
       );
 
@@ -1302,17 +1309,34 @@ const updateJobStatus = async (req, res, next) => {
 
     // Jobs Waiting Booking: Manager has approved quote! Trigger booking request SMS to resident.
     if ((newStage === 'Jobs Waiting Booking' || newStage === 'Jobs Awaiting Booking' || newStage === 'Waiting Job Booking') && existingJob.pipeline_stage !== newStage) {
-      const [existingBooking] = await pool.query(
-        'SELECT id, status FROM booking_requests WHERE work_order_id = ?',
+      // 1. Clear appointment date and time from calendar
+      await pool.query(
+        `UPDATE work_orders SET 
+          previous_appointment_date = IFNULL(scheduled_date, previous_appointment_date),
+          previous_appointment_time = IFNULL(scheduled_time_slot, previous_appointment_time),
+          scheduled_date = NULL,
+          scheduled_time_slot = NULL
+         WHERE id = ?`,
         [id]
       );
-      if (existingBooking.length === 0 || existingBooking[0].status === 'EXPIRED') {
-        await BookingRequestService.triggerAutoBookingRequest(id).catch(err => {
-          console.error('[updateJob] Error triggering auto booking request on Jobs Waiting Booking:', err.message);
-        });
-      } else {
-        console.log(`[updateJob] Booking request already exists for work order #${id} (status: ${existingBooking[0].status}), skipping duplicate trigger.`);
-      }
+
+      // 2. Clear & reset booking request so old booking date is removed and tenant can rebook fresh
+      await pool.query(
+        `UPDATE booking_requests SET 
+          status = 'WAITING_FOR_BOOKING',
+          booked_date = NULL,
+          booked_time_slot = NULL,
+          booked_at = NULL,
+          reminder_count = 0,
+          last_reminder_at = NULL
+         WHERE work_order_id = ?`,
+        [id]
+      );
+
+      // 3. Trigger fresh booking request SMS to tenant
+      await BookingRequestService.triggerAutoBookingRequest(id).catch(err => {
+        console.error('[updateJob] Error triggering auto booking request on Jobs Waiting Booking:', err.message);
+      });
 
       const [admins] = await pool.query("SELECT id FROM users WHERE role = 'OFFICE_ADMIN'");
       for (const admin of admins) {
@@ -1547,7 +1571,14 @@ const cancelJob = async (req, res, next) => {
 
     // 6. Stop old booking reminder workflow
     await connection.query(
-      `UPDATE booking_requests SET status = 'CANCELLED' WHERE work_order_id = ? AND status = 'WAITING_FOR_BOOKING'`,
+      `UPDATE booking_requests SET 
+          status = 'WAITING_FOR_BOOKING',
+          booked_date = NULL,
+          booked_time_slot = NULL,
+          booked_at = NULL,
+          reminder_count = 0,
+          last_reminder_at = NULL
+         WHERE work_order_id = ?`,
       [id]
     );
 

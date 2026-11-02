@@ -126,7 +126,8 @@ const calculateStaffAvailableSlots = async (staffProfileId, targetDate, duration
   const [existingJobs] = await connection.query(
     `SELECT id, scheduled_time_slot, duration_hours 
      FROM work_orders 
-     WHERE assigned_staff_id = ? AND scheduled_date = ? AND scheduled_time_slot IS NOT NULL`,
+     WHERE assigned_staff_id = ? AND scheduled_date = ? AND scheduled_time_slot IS NOT NULL
+       AND (pipeline_stage IS NULL OR pipeline_stage NOT IN ('Cancelled', 'Jobs Waiting Booking', 'Jobs Awaiting Booking', 'Waiting Job Booking'))`,
     [staffProfileId, targetDate]
   );
 
@@ -388,7 +389,8 @@ const calculateMultiStaffAvailableSlots = async (
   const [existingJobs] = await connection.query(
     `SELECT id, assigned_staff_id, scheduled_time_slot, duration_hours 
      FROM work_orders 
-     WHERE assigned_staff_id IN (?) AND scheduled_date = ? AND scheduled_time_slot IS NOT NULL`,
+     WHERE assigned_staff_id IN (?) AND scheduled_date = ? AND scheduled_time_slot IS NOT NULL
+       AND (pipeline_stage IS NULL OR pipeline_stage NOT IN ('Cancelled', 'Jobs Waiting Booking', 'Jobs Awaiting Booking', 'Waiting Job Booking'))`,
     [staffIds, targetDate]
   );
 

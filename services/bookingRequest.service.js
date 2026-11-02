@@ -28,16 +28,22 @@ const triggerAutoBookingRequest = async (workOrderId) => {
 
     const propertyAddress = job.property_address || '';
 
-    // 2. Generate secure token
-    const token = crypto.randomBytes(32).toString('hex');
+    // 2. Resolve secure token (preserve existing token so previous links sent to the tenant remain functional)
+    const [existingBooking] = await pool.query(
+      'SELECT secure_token FROM booking_requests WHERE work_order_id = ?',
+      [workOrderId]
+    );
+    const token = existingBooking.length > 0 && existingBooking[0].secure_token
+      ? existingBooking[0].secure_token
+      : crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000); // 14 days expiry
 
-    // 3. Create or reset booking request with fresh secure token
+    // 3. Create or reset booking request with secure token & clear booked date/slot
     await pool.query(
       `INSERT INTO booking_requests (work_order_id, secure_token, status, expires_at, booked_date, booked_time_slot, booked_at)
        VALUES (?, ?, 'WAITING_FOR_BOOKING', ?, NULL, NULL, NULL)
        ON DUPLICATE KEY UPDATE 
-         secure_token = VALUES(secure_token),
+         secure_token = COALESCE(secure_token, VALUES(secure_token)),
          status = 'WAITING_FOR_BOOKING',
          expires_at = VALUES(expires_at),
          booked_date = NULL,
