@@ -1719,9 +1719,42 @@ const getAssignmentHistory = async (req, res, next) => {
       reason: log.selection_reason,
     }));
 
+    let appLogs = [];
+    try {
+      const [appRows] = await pool.query(
+        `SELECT 
+          ah.*,
+          u.full_name as performed_by_name,
+          u.email as performed_by_email
+         FROM appointment_history ah
+         LEFT JOIN users u ON ah.performed_by = u.id
+         WHERE ah.work_order_id = ?
+         ORDER BY ah.created_at DESC, ah.id DESC`,
+        [id]
+      );
+      appLogs = appRows.map(r => ({
+        id: r.id,
+        workOrderId: r.work_order_id,
+        actionType: r.action_type,
+        previousDate: r.previous_date ? String(r.previous_date).substring(0, 10) : null,
+        previousTime: r.previous_time || null,
+        newDate: r.new_date ? String(r.new_date).substring(0, 10) : null,
+        newTime: r.new_time || null,
+        cancellationType: r.cancellation_type || null,
+        reason: r.reason || null,
+        notes: r.notes || null,
+        performedByName: r.performed_by_name || 'Office Admin',
+        performedByRole: r.performed_by_role || 'ADMIN',
+        timestamp: r.created_at
+      }));
+    } catch (ahErr) {
+      console.warn('[Job History] Could not query appointment_history:', ahErr.message);
+    }
+
     res.status(200).json({
       success: true,
       data: history,
+      appointmentHistory: appLogs,
     });
   } catch (err) {
     next(err);

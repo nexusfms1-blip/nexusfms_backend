@@ -31,7 +31,7 @@ const formatMediaUrl = (url) => {
 };
 
 // Helper to format raw database row to Frontend job object
-const formatJobRow = (r, mediaList = [], staffMap = {}, currentStaffId = null) => {
+const formatJobRow = (r, mediaList = [], staffMap = {}, currentStaffId = null, completionInfo = null) => {
   const assignedIds = r.assigned_staff_ids 
     ? (typeof r.assigned_staff_ids === 'string' ? JSON.parse(r.assigned_staff_ids) : r.assigned_staff_ids) 
     : (r.assigned_staff_id ? [r.assigned_staff_id] : []);
@@ -74,6 +74,22 @@ const formatJobRow = (r, mediaList = [], staffMap = {}, currentStaffId = null) =
     coContractors: coContractors,
     scheduledDate: r.scheduled_date ? String(r.scheduled_date).substring(0, 10) : null,
     scheduledTimeSlot: r.scheduled_time_slot || null,
+    // Cancellation & Reschedule Info
+    cancellationType: r.cancellation_type || null,
+    cancellationReason: r.cancellation_reason || null,
+    cancelledBy: r.cancelled_by || null,
+    cancelledAt: r.cancelled_at || null,
+    previousAppointmentDate: r.previous_appointment_date ? String(r.previous_appointment_date).substring(0, 10) : null,
+    previousAppointmentTime: r.previous_appointment_time || null,
+    // Completion Report Info
+    completionReport: completionInfo ? {
+      workReportSummary: completionInfo.notes || '',
+      completionStatus: completionInfo.completion_status || 'COMPLETED',
+      completedAt: completionInfo.completed_at || null,
+      actualHoursSpent: completionInfo.actual_hours_spent || null
+    } : null,
+    workReportSummary: completionInfo?.notes || null,
+    completedAt: completionInfo?.completed_at || null,
     secureToken: r.secure_token,
     createdAt: r.created_at ? String(r.created_at).substring(0, 10) : null,
     residentPhotos: mediaList.map(m => ({
@@ -129,8 +145,9 @@ const getMyAssignedJobs = async (req, res, next) => {
 
     const [rows] = await pool.query(sql, queryParams);
 
-    // Batch query customer_media_uploads for all jobs
+    // Batch query customer_media_uploads and completions for all jobs
     let mediaByJob = {};
+    let completionsByJob = {};
     if (rows.length > 0) {
       const jobIds = rows.map(r => r.id);
       const [mediaRows] = await pool.query(
@@ -142,6 +159,20 @@ const getMyAssignedJobs = async (req, res, next) => {
       for (const m of mediaRows) {
         if (!mediaByJob[m.work_order_id]) mediaByJob[m.work_order_id] = [];
         mediaByJob[m.work_order_id].push(m);
+      }
+
+      try {
+        const [compRows] = await pool.query(
+          `SELECT work_order_id, notes, completion_status, completed_at, actual_hours_spent
+           FROM staff_job_completions
+           WHERE work_order_id IN (?)`,
+          [jobIds]
+        );
+        for (const c of compRows) {
+          completionsByJob[c.work_order_id] = c;
+        }
+      } catch (compErr) {
+        console.warn('[StaffPortal] Could not query completions:', compErr.message);
       }
     }
 
@@ -156,7 +187,7 @@ const getMyAssignedJobs = async (req, res, next) => {
       staffMap[s.id] = s;
     }
 
-    const jobs = rows.map(r => formatJobRow(r, mediaByJob[r.id] || [], staffMap, staffProfileId));
+    const jobs = rows.map(r => formatJobRow(r, mediaByJob[r.id] || [], staffMap, staffProfileId, completionsByJob[r.id]));
 
     res.status(200).json({
       success: true,
@@ -235,9 +266,22 @@ const getMyAssignedJobById = async (req, res, next) => {
       staffMap[s.id] = s;
     }
 
+    let compInfo = null;
+    try {
+      const [compRows] = await pool.query(
+        `SELECT work_order_id, notes, completion_status, completed_at, actual_hours_spent
+         FROM staff_job_completions
+         WHERE work_order_id = ?`,
+        [job.id]
+      );
+      if (compRows.length > 0) compInfo = compRows[0];
+    } catch (compErr) {
+      console.warn('[StaffPortal] Could not query completion for job:', compErr.message);
+    }
+
     res.status(200).json({
       success: true,
-      data: formatJobRow(job, mediaRows, staffMap, staffProfileId),
+      data: formatJobRow(job, mediaRows, staffMap, staffProfileId, compInfo),
     });
   } catch (err) {
     next(err);

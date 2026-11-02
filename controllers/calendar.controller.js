@@ -536,15 +536,47 @@ const dispatchJob = async (req, res, next) => {
       });
     }
 
-    // 3. Commit Dispatch / Booking Update
+    // 3. Track History & Commit Dispatch / Booking Update
+    const isReschedule = (job.scheduled_date && (String(job.scheduled_date).substring(0, 10) !== targetDate || job.scheduled_time_slot !== targetSlot));
+    const isReassignment = (job.assigned_staff_id && job.assigned_staff_id !== finalStaffId);
+
+    if (isReschedule || isReassignment) {
+      try {
+        await connection.query(
+          `INSERT INTO appointment_history (
+            work_order_id, action_type, previous_date, previous_time, new_date, new_time,
+            performed_by, performed_by_role, reason, notes
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            targetJobId,
+            isReschedule ? 'RESCHEDULE' : 'REASSIGNMENT',
+            job.scheduled_date ? String(job.scheduled_date).substring(0, 10) : null,
+            job.scheduled_time_slot || null,
+            targetDate,
+            targetSlot,
+            req.user?.id || null,
+            req.user?.role || 'OFFICE_ADMIN',
+            isReschedule ? 'Calendar Drag / Reschedule' : 'Technician Reassigned',
+            `Updated by ${req.user?.full_name || 'Admin'} on calendar.`
+          ]
+        );
+      } catch (histErr) {
+        console.warn('[Calendar Dispatch] Failed to insert appointment_history log:', histErr.message);
+      }
+    }
+
     await connection.query(
       `UPDATE work_orders SET 
         assigned_staff_id = ?,
         scheduled_date = ?,
         scheduled_time_slot = ?,
+        previous_appointment_date = IF(? = 1, scheduled_date, previous_appointment_date),
+        previous_appointment_time = IF(? = 1, scheduled_time_slot, previous_appointment_time),
+        cancellation_type = NULL,
+        cancellation_reason = NULL,
         pipeline_stage = 'Jobs'
        WHERE id = ?`,
-      [finalStaffId, targetDate, targetSlot, targetJobId]
+      [finalStaffId, targetDate, targetSlot, isReschedule ? 1 : 0, isReschedule ? 1 : 0, targetJobId]
     );
 
     // Stop reminders if this job had a booking request

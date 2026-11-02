@@ -32,6 +32,32 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads', 'customer_media')));
 app.use('/uploads/customer_media', express.static(path.join(__dirname, 'uploads', 'customer_media')));
 
+// Dedicated fallback for missing static upload files (e.g. legacy files before Cloudinary CDN migration)
+app.use('/uploads', (req, res) => {
+  const isImageReq = req.path.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i) || (req.headers.accept && req.headers.accept.includes('image'));
+  if (isImageReq) {
+    const svgPlaceholder = `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400" fill="#f8fafc">
+  <rect width="600" height="400" fill="#f1f5f9"/>
+  <rect x="20" y="20" width="560" height="360" rx="12" fill="#ffffff" stroke="#cbd5e1" stroke-width="2" stroke-dasharray="6 6"/>
+  <circle cx="300" cy="155" r="42" fill="#fee2e2"/>
+  <path d="M285 155 L300 135 L315 155" stroke="#ef4444" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="315" cy="140" r="4" fill="#ef4444"/>
+  <text x="300" y="235" font-family="system-ui, -apple-system, sans-serif" font-size="19" font-weight="bold" fill="#0f172a" text-anchor="middle">Photo File Unavailable</text>
+  <text x="300" y="265" font-family="system-ui, -apple-system, sans-serif" font-size="13" fill="#64748b" text-anchor="middle">This photo was uploaded locally prior to Cloud CDN migration.</text>
+  <text x="300" y="290" font-family="system-ui, -apple-system, sans-serif" font-size="12" fill="#94a3b8" text-anchor="middle">All new photos are permanently stored on Cloudinary CDN.</text>
+</svg>`;
+    res.setHeader('Content-Type', 'image/svg+xml');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    return res.status(404).send(svgPlaceholder);
+  }
+
+  res.status(404).json({
+    success: false,
+    error: 'MEDIA_NOT_FOUND',
+    message: `The requested media file was not found on the server (${req.originalUrl}). Photos uploaded prior to Cloud CDN migration were stored on ephemeral server storage.`,
+  });
+});
+
 // Import Routes
 const authRoutes = require('./routes/auth.routes');
 const tenantRoutes = require('./routes/tenant.routes');
