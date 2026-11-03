@@ -560,6 +560,25 @@ const handleManagerApprovalReply = async (req, res) => {
       targetRef = extractReferenceFromText(textContent);
     }
 
+    // 3. Fallback: Search by sender manager email for recent Completed Quotes work order
+    if (!targetJobNumber && !targetRef && fromEmail) {
+      try {
+        const [recentQuote] = await pool.query(
+          `SELECT id, job_number FROM work_orders 
+           WHERE (manager_email = ? OR original_sender_email = ?) 
+             AND pipeline_stage = 'Completed Quotes'
+           ORDER BY id DESC LIMIT 1`,
+          [fromEmail.trim(), fromEmail.trim()]
+        );
+        if (recentQuote.length > 0) {
+          targetJobNumber = recentQuote[0].job_number;
+          console.log(`[Webhook Manager Reply] Inferred target work order #${targetJobNumber} from sender email ${fromEmail}`);
+        }
+      } catch (err) {
+        console.warn('[Webhook Manager Reply] Error during fallback email lookup:', err.message);
+      }
+    }
+
     if (!targetJobNumber && !targetRef) {
       console.warn('[Webhook Manager Reply] Could not extract Job Number or Reference from email:', subject);
       return res.status(400).json({
@@ -592,11 +611,16 @@ const handleManagerApprovalReply = async (req, res) => {
 
     // 4. Smart Intent Classification (Approval vs Rejection vs Ambiguous)
     const approvalPatterns = [
-      /\b(approved|approve|proceed|go\s*ahead|accepted|accept|confirmed)\b/i,
+      /\b(approved|approve|proceed|go\s*ahead|accepted|accept|confirmed|proceeding)\b/i,
       /quote\s*(is\s*)?approved/i,
-      /proceed\s*with/i,
+      /proceed\s*(with\s*(the\s*)?(quote|work|repair|job))?/i,
+      /go\s*ahead\s*(with\s*(the\s*)?(quote|work|repair|job))?/i,
+      /approval\s*confirmed/i,
+      /please\s*(proceed|go\s*ahead|approve)/i,
       /ok\s*to\s*proceed/i,
-      /please\s*proceed/i,
+      /customer\s*(accepts|approves)\s*quote/i,
+      /partial\s*approval/i,
+      /approved\s*up\s*to\s*([£$€]?\d+)/i,
     ];
 
     const rejectionPatterns = [
@@ -618,6 +642,12 @@ const handleManagerApprovalReply = async (req, res) => {
          WHERE id = ?`,
         [cleanSnippet, job.id]
       );
+
+      try {
+        await syncWorkOrderToAsana(job.id);
+      } catch (err) {
+        console.warn('[Webhook Manager Reply] Asana sync error on rejection:', err.message);
+      }
 
       console.log(`[Webhook Manager Reply] ❌ Work order #${job.job_number} marked as REJECTED by Property Manager.`);
       return res.status(200).json({
@@ -646,6 +676,32 @@ const handleManagerApprovalReply = async (req, res) => {
       await BookingRequestService.triggerAutoBookingRequest(job.id).catch(err => {
         console.error('[Webhook Manager Reply] Error triggering booking request:', err.message);
       });
+
+      // Sync to Asana immediately so Asana board moves to Jobs Waiting Booking
+      try {
+        await syncWorkOrderToAsana(job.id);
+      } catch (asanaErr) {
+        console.warn('[Webhook Manager Reply] Asana sync error on approval:', asanaErr.message);
+      }
+
+      // Dispatch in-app notification to Office Admins
+      try {
+        const notificationService = require('../services/notification.service');
+        const [admins] = await pool.query("SELECT id FROM users WHERE role = 'OFFICE_ADMIN'");
+        for (const admin of admins) {
+          await notificationService.createNotification({
+            recipientUserId: admin.id,
+            type: 'MANAGER_APPROVED',
+            title: `Manager Approved: #${job.job_number}`,
+            message: `Property Manager approved quote for #${job.job_number} ("${cleanSnippet}"). Moved to Jobs Waiting Booking.`,
+            relatedEntityType: 'work_orders',
+            relatedEntityId: job.id,
+            actionUrl: '/admin/pipeline?stage=Jobs Waiting Booking',
+          }).catch(e => console.warn('[Webhook Manager Reply] admin notif error:', e.message));
+        }
+      } catch (notifErr) {
+        console.warn('[Webhook Manager Reply] Admin notification error:', notifErr.message);
+      }
 
       console.log(`[Webhook Manager Reply] ✓ Work order #${job.job_number} AUTO-APPROVED by Property Manager. Moved to Jobs Waiting Booking.`);
       return res.status(200).json({
