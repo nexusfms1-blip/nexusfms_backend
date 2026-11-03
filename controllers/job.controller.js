@@ -7,6 +7,7 @@ const { uploadMediaFile } = require('../services/cloudinary.service');
 const { dispatchN8NWebhook, getAdminAndOfficeRecipientEmail } = require('../services/webhook.service');
 const { createWorkOrderEntity } = require('../services/workOrder.service');
 const { buildWorkReference, extractReferenceFromText } = require('../utils/workReference');
+const { syncWorkOrderToAsana, deleteAsanaTask } = require('../services/asana.service');
 
 
 // Helper to format any date input to strict YYYY-MM-DD
@@ -461,6 +462,11 @@ const createJob = async (req, res, next) => {
       });
     }
 
+    // Real-Time Asana Sync: Mirror new work order in Asana Quotes column
+    syncWorkOrderToAsana(creationResult.workOrderId).catch(err => {
+      console.warn('[createJob] Asana sync error:', err.message);
+    });
+
     res.status(201).json({
       success: true,
       message: 'Work order created successfully.',
@@ -777,6 +783,11 @@ const moveJobStage = async (req, res, next) => {
         console.warn('[moveJobStage] Error dispatching completed job events:', e.message);
       }
     }
+
+    // Real-Time Asana Sync: Mirror stage movement in Asana
+    syncWorkOrderToAsana(id).catch(err => {
+      console.warn('[moveJobStage] Asana sync error:', err.message);
+    });
 
     res.status(200).json({
       success: true,
@@ -1371,6 +1382,11 @@ const updateJobStatus = async (req, res, next) => {
       [id]
     );
 
+    // Real-Time Asana Sync: Update details / stage / technician in Asana
+    syncWorkOrderToAsana(id).catch(err => {
+      console.warn('[updateJobStatus] Asana sync error:', err.message);
+    });
+
     res.status(200).json({
       success: true,
       message: 'Work order updated successfully.',
@@ -1388,11 +1404,17 @@ const deleteJob = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const [existing] = await pool.query('SELECT id FROM work_orders WHERE id = ?', [id]);
+    const [existing] = await pool.query('SELECT id, asana_task_id FROM work_orders WHERE id = ?', [id]);
     if (existing.length === 0) {
       return res.status(404).json({
         success: false,
         message: `Work order not found with ID ${id}`,
+      });
+    }
+
+    if (existing[0].asana_task_id) {
+      deleteAsanaTask(existing[0].asana_task_id).catch(err => {
+        console.warn('[deleteJob] Asana task delete error:', err.message);
       });
     }
 
@@ -1680,6 +1702,11 @@ const cancelJob = async (req, res, next) => {
     // 8. Generate a new booking/rebooking request
     const { triggerAutoBookingRequest } = require('../services/bookingRequest.service');
     await triggerAutoBookingRequest(id);
+
+    // Real-Time Asana Sync: Move to Jobs Waiting Booking & clear due date
+    syncWorkOrderToAsana(id).catch(err => {
+      console.warn('[cancelJob] Asana sync error:', err.message);
+    });
 
     res.status(200).json({
       success: true,

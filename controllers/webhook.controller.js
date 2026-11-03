@@ -6,6 +6,7 @@ const { Readable } = require('stream');
 const { pool } = require('../config/db');
 const { createWorkOrderEntity } = require('../services/workOrder.service');
 const { uploadMediaFile } = require('../services/cloudinary.service');
+const { syncWorkOrderToAsana } = require('../services/asana.service');
 // Resilient loader for work reference builder with standalone fallback
 let buildWorkReference;
 let extractReferenceFromText;
@@ -133,7 +134,7 @@ const handleIncomingEmailQuote = async (req, res) => {
     } = req.body;
 
     // 1. Mandatory Fields Validation (P0-2 & P0-10)
-    const normalizedTitle = (title || subject || '').trim();
+    const normalizedTitle = (title || subject || description || 'Maintenance Request').trim().slice(0, 150);
     const normalizedResName = (resident_name || '').trim();
     const normalizedPhone = (contact_phone || '').trim();
     const normalizedAddress = (property_address || '').trim();
@@ -423,6 +424,11 @@ const handleIncomingEmailQuote = async (req, res) => {
       // 8. Commit Transaction
       await conn.commit();
       conn.release();
+
+      // Real-Time Asana Sync: Mirror new work order in Asana Quotes column
+      syncWorkOrderToAsana(createdWorkOrderId).catch(err => {
+        console.warn('[Webhook Quotes] Asana sync error:', err.message);
+      });
 
       // P0-1: Photo-request SMS/email fires ONLY after successful DB commit.
       // This guarantees the tenant is never notified for a work order that was rolled back.

@@ -2,6 +2,7 @@ const { pool } = require('../config/db');
 const notificationService = require('../services/notification.service');
 const { uploadMediaFile } = require('../services/cloudinary.service');
 const { dispatchN8NWebhook, getAdminAndOfficeRecipientEmail } = require('../services/webhook.service');
+const { syncWorkOrderToAsana } = require('../services/asana.service');
 
 
 // Helper to resolve staff profile ID from logged in user ID
@@ -825,6 +826,11 @@ const markJobComplete = async (req, res, next) => {
         console.warn('[N8N_WEBHOOK] Failed to dispatch JOB_COMPLETED admin alert:', err.message);
       });
 
+    // Real-Time Asana Sync: Move to Completed Jobs column in Asana
+    syncWorkOrderToAsana(id).catch(err => {
+      console.warn('[markJobAsCompleted] Asana sync error:', err.message);
+    });
+
     res.status(200).json({
       success: true,
       message: "Work order marked as 'Completed Jobs' successfully.",
@@ -1303,6 +1309,11 @@ const completeJobAtomic = async (req, res, next) => {
     } catch(err) {
       console.error('[JOB_COMPLETION_NOTIFICATIONS_ERROR]', err);
     }
+
+    // Real-Time Asana Sync: Move to Completed Jobs column in Asana
+    syncWorkOrderToAsana(id).catch(err => {
+      console.warn('[submitJobCompletion] Asana sync error:', err.message);
+    });
 
     res.status(200).json({ success: true, message: 'Job completed successfully.' });
   } catch (err) {

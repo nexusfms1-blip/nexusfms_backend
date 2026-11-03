@@ -77,7 +77,8 @@ const runAutoMigrations = async () => {
       // Contractor daily photo/report reminder tracking
       { name: 'contractor_reminder_active', ddl: "ALTER TABLE work_orders ADD COLUMN contractor_reminder_active TINYINT(1) NOT NULL DEFAULT 0" },
       { name: 'last_contractor_reminder_at', ddl: "ALTER TABLE work_orders ADD COLUMN last_contractor_reminder_at DATETIME DEFAULT NULL" },
-      { name: 'contractor_reminder_count', ddl: "ALTER TABLE work_orders ADD COLUMN contractor_reminder_count INT NOT NULL DEFAULT 0" }
+      { name: 'contractor_reminder_count', ddl: "ALTER TABLE work_orders ADD COLUMN contractor_reminder_count INT NOT NULL DEFAULT 0" },
+      { name: 'asana_task_id', ddl: "ALTER TABLE work_orders ADD COLUMN asana_task_id VARCHAR(100) DEFAULT NULL" }
     ];
 
     for (const col of optionalColumns) {

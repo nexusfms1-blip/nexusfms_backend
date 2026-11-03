@@ -6,6 +6,7 @@ const { dispatchN8NWebhook, getAdminAndOfficeRecipientEmail } = require('../serv
 const { uploadMediaFile } = require('../services/cloudinary.service');
 const QuoteRequestService = require('../services/quoteRequest.service');
 const BookingRequestService = require('../services/bookingRequest.service');
+const { syncWorkOrderToAsana } = require('../services/asana.service');
 
 
 // @desc    Get public request information by secure token (NO LOGIN REQUIRED)
@@ -870,6 +871,11 @@ const submitPublicBooking = async (req, res, next) => {
         console.warn('[N8N_WEBHOOK] Failed to dispatch BOOKING_CONFIRMED to manager:', err.message);
       });
     }
+
+    // Real-Time Asana Sync: Move to Jobs column with scheduled due date in Asana
+    syncWorkOrderToAsana(workOrderId).catch(err => {
+      console.warn('[submitPublicBooking] Asana sync error:', err.message);
+    });
 
     res.status(200).json({
       success: true,
