@@ -12,6 +12,8 @@ const {
   resendQuoteRequest,
   sendQuoteToManager,
   remindContractorPhotosReport,
+  resendBookingRequest,
+  bulkSendReminders,
 } = require('../controllers/job.controller');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth.middleware');
 
@@ -27,8 +29,14 @@ router.get('/:id', getJobById);
 router.get('/:id/assignment-history', authorizeRoles('OFFICE_ADMIN', 'OFFICE_TEAM', 'MAINTENANCE_STAFF'), getAssignmentHistory);
 router.get('/:id/completion-evidence', authorizeRoles('OFFICE_ADMIN', 'OFFICE_TEAM', 'MAINTENANCE_STAFF'), getJobCompletionEvidence);
 
+// Bulk Reminder to Tenants in Section (Office Admin & Office Team)
+router.post('/bulk-reminder', authorizeRoles('OFFICE_ADMIN', 'OFFICE_TEAM', 'SUPER_ADMIN'), bulkSendReminders);
+
 // Create Endpoint (Office Admin & Office Team)
 router.post('/', authorizeRoles('OFFICE_ADMIN', 'OFFICE_TEAM'), createJob);
+
+// Resend Tenant Booking Request (Office Admin & Office Team)
+router.post('/:id/resend-booking-request', authorizeRoles('OFFICE_ADMIN', 'OFFICE_TEAM', 'SUPER_ADMIN'), resendBookingRequest);
 
 // Resend Quote Photo Request (Office Admin & Office Team)
 router.post('/:id/resend-quote-request', authorizeRoles('OFFICE_ADMIN', 'OFFICE_TEAM'), resendQuoteRequest);

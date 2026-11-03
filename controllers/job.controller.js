@@ -1836,6 +1836,87 @@ const resendQuoteRequest = async (req, res, next) => {
   }
 };
 
+// @desc    Resend Tenant Booking Request (SMS & Email) with calendar slot link
+// @route   POST /api/v1/jobs/:id/resend-booking-request
+// @access  Private (Admin & Office Team)
+const resendBookingRequest = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const result = await BookingRequestService.triggerAutoBookingRequest(id);
+    return res.status(200).json({
+      success: true,
+      message: 'Booking request SMS and notification sent to tenant successfully.',
+      data: result,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// @desc    Bulk Send Reminders to all tenants in a given pipeline section (e.g., 'Jobs Waiting Booking' or 'Quotes')
+// @route   POST /api/v1/jobs/bulk-reminder
+// @access  Private (Admin & Office Team)
+const bulkSendReminders = async (req, res, next) => {
+  try {
+    const { section } = req.body;
+    if (!section || (section !== 'Jobs Waiting Booking' && section !== 'Quotes')) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid section. Must be 'Jobs Waiting Booking' or 'Quotes'."
+      });
+    }
+
+    let query = '';
+    if (section === 'Jobs Waiting Booking') {
+      query = `SELECT id, job_number, resident_name, contact_phone 
+               FROM work_orders 
+               WHERE pipeline_stage IN ('Jobs Waiting Booking', 'Jobs Awaiting Booking', 'Waiting Job Booking')
+               ORDER BY id DESC`;
+    } else {
+      query = `SELECT id, job_number, resident_name, contact_phone 
+               FROM work_orders 
+               WHERE pipeline_stage = 'Quotes'
+               ORDER BY id DESC`;
+    }
+
+    const [orders] = await pool.query(query);
+    if (orders.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: `No work orders currently in ${section} to remind.`,
+        sentCount: 0
+      });
+    }
+
+    const totalToRemind = orders.length;
+    (async () => {
+      let sent = 0;
+      for (const order of orders) {
+        try {
+          if (section === 'Jobs Waiting Booking') {
+            await BookingRequestService.triggerAutoBookingRequest(order.id);
+          } else {
+            await QuoteRequestService.triggerAutoPhotoRequest(order.id);
+          }
+          sent++;
+          await new Promise(r => setTimeout(r, 250));
+        } catch (err) {
+          console.warn(`[bulkSendReminders] Error reminding WO #${order.id}:`, err.message);
+        }
+      }
+      console.log(`[bulkSendReminders] Successfully processed ${sent}/${totalToRemind} reminders for ${section}`);
+    })();
+
+    return res.status(200).json({
+      success: true,
+      message: `Reminders are being dispatched to all ${totalToRemind} tenants in "${section}" via SMS and notification.`,
+      targetCount: totalToRemind
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // @desc    Send Formal Quote Email to Property Manager & Move to Completed Quotes
 // @route   POST /api/v1/jobs/:id/send-quote-to-manager
 // @access  Private (Admin & Office Team)
@@ -2113,6 +2194,8 @@ module.exports = {
   cancelJob,
   getAssignmentHistory,
   resendQuoteRequest,
+  resendBookingRequest,
+  bulkSendReminders,
   sendQuoteToManager,
   formatJobTitle,
 };
