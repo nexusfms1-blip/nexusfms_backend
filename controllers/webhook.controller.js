@@ -152,6 +152,28 @@ const handleIncomingEmailQuote = async (req, res) => {
     // Normalized canonical RFC 5322 Message-ID (max 255 chars)
     const normalizedRefId = rawRefId.slice(0, 255);
 
+    // Strict Safety Gate: Reject accounting/financial documents (Remittance Advices, Statements, Receipts)
+    const financialDocPatterns = [
+      /\bremittance(\s*advice)?\b/i,
+      /\blandlord\s*statement\b/i,
+      /\brent\s*statement\b/i,
+      /\bstatement\s*of\s*account\b/i,
+      /\bpayment\s*(received|confirmation|receipt|advice|processed)\b/i,
+      /\bproof\s*of\s*payment\b/i,
+      /\bbacs\s*(payment|transfer)\b/i,
+      /\bcredit\s*note\b/i,
+      /\baccount\s*statement\b/i,
+      /\bmonthly\s*statement\b/i
+    ];
+    const isFinancialEmail = financialDocPatterns.some(p => p.test(normalizedTitle) || p.test(normalizedDesc) || p.test(subject || ''));
+    if (isFinancialEmail) {
+      console.warn(`[Webhook Quotes] 🛑 Rejected non-work-order financial email: "${normalizedTitle}" from ${normalizedSenderEmail}`);
+      return res.status(422).json({
+        success: false,
+        message: 'Rejected: Email is an accounting/remittance/statement document, not a maintenance fault work order.',
+      });
+    }
+
     if (!normalizedTitle) {
       return res.status(400).json({
         success: false,
