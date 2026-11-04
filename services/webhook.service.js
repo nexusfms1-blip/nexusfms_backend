@@ -341,6 +341,10 @@ const dispatchN8NWebhook = async (eventType, payload) => {
   }
 
   if (eventType === 'JOB_COMPLETED') {
+    // Per client requirement: "when jobs have been moved to completed, do not send the tenant a message. tenants should only see when jobs are booked in, nothing else."
+    console.log('[N8N_WEBHOOK] 🛑 Suppressing JOB_COMPLETED webhook for tenant as per client requirement.');
+    return { success: true, suppressed: true, reason: 'Tenant completion notifications disabled per client requirement' };
+
     const frontendBase = getFrontendBaseUrl();
     const workOrderId = formattedPayload.workOrderId || formattedPayload.entityId || formattedPayload.relatedEntityId || null;
 

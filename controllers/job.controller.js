@@ -698,64 +698,8 @@ const moveJobStage = async (req, res, next) => {
         const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
         const completionReportUrl = `${frontendBase}/jobs/${id}/report`;
 
-        // Notify Tenant (Mukul) - in-app record only, dedicated single N8N webhook handles SMS/Email
-        notificationService.createNotification({
-          recipientRole: 'TENANT',
-          recipientUserId: null,
-          type: 'JOB_COMPLETED',
-          title: `Repair Job Completed: #${jNum}`,
-          message: `Dear ${tName}, your repair job #${jNum} ("${row?.title}") at ${pAddress} has been completed by technician ${techStaffName}. Thank you!`,
-          contactPhone: tPhone,
-          contactEmail: tEmail,
-          technicianName: techStaffName,
-          name: tName,
-          propertyAddress: pAddress,
-          relatedEntityType: 'work_orders',
-          relatedEntityId: parseInt(id, 10),
-          channels: ['IN_APP'],
-          skipWebhook: true,
-          data: {
-            workOrderId: parseInt(id, 10),
-            jobNumber: jNum,
-            title: row?.title,
-            residentName: tName,
-            name: tName,
-            recipientName: tName,
-            residentPhone: tPhone,
-            residentEmail: tEmail,
-            technicianName: techStaffName,
-            propertyAddress: pAddress,
-            status: 'COMPLETED'
-          }
-        }).catch(err => console.warn('[JOB_COMPLETED_NOTIF_WARN] Tenant notification failed:', err.message));
-
-        // Dispatch single authoritative N8N Webhook with PDF report link
-        dispatchN8NWebhook('JOB_COMPLETED', {
-          event: 'JOB_COMPLETED',
-          type: 'JOB_COMPLETED',
-          entityId: parseInt(id, 10),
-          workOrderId: parseInt(id, 10),
-          jobNumber: jNum,
-          title: row?.title,
-          message: `Job #${jNum} ("${row?.title}") completed by ${techStaffName} for resident ${tName}`,
-          residentName: tName,
-          name: tName,
-          recipientName: tName,
-          residentPhone: tPhone,
-          residentEmail: tEmail,
-          contactPhone: tPhone,
-          contactEmail: tEmail,
-          to: tPhone,
-          phone: tPhone,
-          email: tEmail,
-          technicianName: techStaffName,
-          propertyAddress: pAddress,
-          status: 'COMPLETED',
-          completedAt: new Date().toISOString(),
-          actionUrl: completionReportUrl,
-          reportUrl: completionReportUrl,
-          pdfReportUrl: completionReportUrl
-        }).catch(err => console.warn('[N8N_DISPATCH_WARN] Failed to dispatch JOB_COMPLETED webhook:', err.message));
+        // Per client requirement: "when jobs have been moved to completed, do not send the tenant a message. tenants should only see when jobs are booked in, nothing else."
+        // Tenant completion notification and webhook dispatch are disabled.
 
         // Asynchronously dispatch ADMIN_OFFICE_ALERT to n8n for Admin and Office Team email notifications
         getAdminAndOfficeRecipientEmail(pool)
