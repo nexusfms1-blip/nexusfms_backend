@@ -775,22 +775,46 @@ const updateJobStatus = async (req, res, next) => {
       });
     }
 
-    let staffIdsArr = assigned_staff_ids || assignedStaffIds;
+    // Helper to strictly clean staff IDs from 'stf-95' or 'usr-95' into pure integer 95
+    const cleanStaffIdInt = (val) => {
+      if (val === null || val === undefined) return null;
+      if (typeof val === 'number') return isNaN(val) ? null : Math.floor(val);
+      const str = String(val).replace(/^(stf-|usr-)/i, '').trim();
+      const parsed = parseInt(str, 10);
+      return isNaN(parsed) ? null : parsed;
+    };
+
+    let staffIdsArr = assigned_staff_ids !== undefined ? assigned_staff_ids : assignedStaffIds;
+    let cleanStaffIdsArr = undefined;
     let staffIdsJson = undefined;
+
     if (staffIdsArr !== undefined) {
       if (Array.isArray(staffIdsArr)) {
-        staffIdsJson = staffIdsArr.length > 0 ? JSON.stringify(staffIdsArr) : null;
+        cleanStaffIdsArr = staffIdsArr.map(cleanStaffIdInt).filter(v => v !== null);
+      } else if (typeof staffIdsArr === 'string') {
+        try {
+          const parsed = JSON.parse(staffIdsArr);
+          if (Array.isArray(parsed)) {
+            cleanStaffIdsArr = parsed.map(cleanStaffIdInt).filter(v => v !== null);
+          }
+        } catch (e) {
+          const single = cleanStaffIdInt(staffIdsArr);
+          if (single !== null) cleanStaffIdsArr = [single];
+        }
+      }
+      if (cleanStaffIdsArr !== undefined) {
+        staffIdsJson = cleanStaffIdsArr.length > 0 ? JSON.stringify(cleanStaffIdsArr) : null;
       }
     }
 
-    let rawStaffId = assigned_staff_id || assignedStaffId;
-    if (rawStaffId && typeof rawStaffId === 'string') {
-      rawStaffId = rawStaffId.replace(/^(stf-|usr-)/, '');
+    let rawStaffId = assigned_staff_id !== undefined ? assigned_staff_id : assignedStaffId;
+    if (rawStaffId !== undefined) {
+      rawStaffId = cleanStaffIdInt(rawStaffId);
     }
 
-    // Sync rawStaffId with first element in staffIdsArr if rawStaffId is not passed
-    if (rawStaffId === undefined && staffIdsArr !== undefined) {
-      rawStaffId = staffIdsArr.length > 0 ? staffIdsArr[0] : null;
+    // Sync rawStaffId with first element in cleanStaffIdsArr if rawStaffId is not passed
+    if (rawStaffId === undefined && cleanStaffIdsArr !== undefined) {
+      rawStaffId = cleanStaffIdsArr.length > 0 ? cleanStaffIdsArr[0] : null;
     }
 
     // Strict Role-Based Field Filtering
