@@ -174,6 +174,26 @@ const handleIncomingEmailQuote = async (req, res) => {
       });
     }
 
+    // Strict Safety Gate: Reject chase-up / complaint / status inquiries on existing works (P0 Client Specification)
+    const complaintPatterns = [
+      /\boutstanding\s*works?\b/i,
+      /\bdelayed\s*appointments?\b/i,
+      /\bmissed\s*appointments?\b/i,
+      /\bno\s*one\s*(attended|showed\s*up|turned\s*up)\b/i,
+      /\bchasing\s*(an?\s*)?(update|appointment|works?|job)\b/i,
+      /\b(has\s*made\s*a\s*complaint|making\s*a\s*complaint|formal\s*complaint)\b/i,
+      /\bupdate\s*on\s*(the\s*)?(appointment|progress|attendance)\b/i,
+      /\bstatus\s*update\s*on\s*existing\b/i
+    ];
+    const isComplaintEmail = complaintPatterns.some(p => p.test(normalizedTitle) || p.test(normalizedDesc) || p.test(subject || ''));
+    if (isComplaintEmail) {
+      console.warn(`[Webhook Quotes] 🛑 Rejected chase-up/complaint email on existing works: "${normalizedTitle}" from ${normalizedSenderEmail}`);
+      return res.status(422).json({
+        success: false,
+        message: 'Rejected: Email is an existing job complaint or chase-up follow-up, not a new work order.',
+      });
+    }
+
     if (!normalizedTitle) {
       return res.status(400).json({
         success: false,
@@ -394,6 +414,17 @@ const handleIncomingEmailQuote = async (req, res) => {
       });
 
       // 5. Call Shared Work Order Creation Service
+      // Client Specification: Safety & Compliance Inspections (CP12, EICR, EPC) go straight to booking
+      const compliancePatterns = [
+        /\b(cp12|gas\s*safety(\s*certificate)?|gas\s*safety\s*check|landlord\s*gas\s*safety)\b/i,
+        /\b(eicr|electrical\s*installation\s*condition\s*report|electrical\s*safety(\s*certificate)?)\b/i,
+        /\b(epc|energy\s*performance(\s*certificate)?)\b/i,
+        /\b(boiler\s*service\s*only|annual\s*boiler\s*service)\b/i,
+        /\b(smoke\s*(and|&)\s*co\s*alarm(\s*testing|\s*certificate)?)\b/i
+      ];
+      const isComplianceInspection = compliancePatterns.some(p => p.test(cleanJobTitle) || p.test(normalizedTitle) || p.test(normalizedDesc) || p.test(subject || ''));
+      const targetPipelineStage = isComplianceInspection ? 'Jobs Waiting Booking' : 'Quotes';
+
       const creationResult = await createWorkOrderEntity(
         {
           job_number: preassignedJobNumber,
@@ -404,7 +435,7 @@ const handleIncomingEmailQuote = async (req, res) => {
           property_address: normalizedAddress,
           description: normalizedDesc,
           priority: priority || 'NORMAL',
-          pipeline_stage: 'Quotes',
+          pipeline_stage: targetPipelineStage,
           external_reference_id: normalizedRefId,
           original_sender_email: normalizedSenderEmail,
           work_order_reference: refNumber,
@@ -454,7 +485,14 @@ const handleIncomingEmailQuote = async (req, res) => {
 
       // P0-1: Photo-request SMS/email fires ONLY after successful DB commit.
       // This guarantees the tenant is never notified for a work order that was rolled back.
-      if (creationResult.shouldTriggerPhotoRequest) {
+      if (isComplianceInspection) {
+        // Compliance jobs skip photo request and trigger automated tenant booking link immediately
+        console.log(`[Webhook Quotes] 📋 Compliance/Safety job detected (${cleanJobTitle}). Auto-triggering tenant booking link.`);
+        const BookingRequestService = require('../services/bookingRequest.service');
+        BookingRequestService.triggerAutoBookingRequest(createdWorkOrderId).catch(err => {
+          console.error('[Webhook Quotes] Error triggering compliance auto booking request:', err.message);
+        });
+      } else if (creationResult.shouldTriggerPhotoRequest) {
         const QuoteRequestService = require('../services/quoteRequest.service');
         QuoteRequestService.triggerAutoPhotoRequest(createdWorkOrderId).catch(err => {
           console.error('[Webhook Quotes] Error triggering post-commit photo request:', err.message);
@@ -465,7 +503,9 @@ const handleIncomingEmailQuote = async (req, res) => {
       const targetManagerEmail = manager_email || normalizedSenderEmail;
       if (targetManagerEmail && typeof targetManagerEmail === 'string' && targetManagerEmail.includes('@')) {
         const notificationService = require('../services/notification.service');
-        const ackMessage = 'Thank you for your email, this work order has been acknowledge. We will get a quote sent over as soon as possible. If you have any questions please let me know, Thank you';
+        const ackMessage = isComplianceInspection
+          ? 'Thank you for your email. This compliance inspection request has been booked into our schedule. We are arranging the appointment directly with the resident. If you have any questions please let us know. Thank you'
+          : 'Thank you for your email, this work order has been acknowledge. We will get a quote sent over as soon as possible. If you have any questions please let me know, Thank you';
 
         notificationService.dispatch({
           recipientRole: 'PROPERTY_MANAGER',
